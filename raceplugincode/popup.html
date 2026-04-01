@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>賽馬熱錢流 — 控制台</title>
+  <link rel="stylesheet" href="portal.css">
+  <link rel="stylesheet" href="legacy-popup.css">
+  <script src="jquery.js"></script>
+  <script src="fontawesome.js"></script>
+</head>
+<body>
+  <div class="mf007-portal">
+    <header class="mf007-topnav">
+      <a class="mf007-brand" href="https://www.moneyflow007.com" target="_blank" rel="noopener">
+        <img src="https://www.moneyflow007.com/images/mf007Logo.png" width="36" height="36" alt="" />
+        <span class="mf007-brand-text">
+          <small>MoneyFlow 007</small>
+          <strong>賽馬熱錢流</strong>
+        </span>
+      </a>
+      <nav class="mf007-nav-links" aria-label="主選單">
+        <a href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener"><i class="fa-solid fa-user"></i>帳戶</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener"><i class="fa-solid fa-flag-checkered"></i>賽馬</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener"><i class="fa-solid fa-database"></i>數據庫</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener"><i class="fa-solid fa-chart-pie"></i>分析</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener"><i class="fa-solid fa-book"></i>手冊</a>
+      </nav>
+    </header>
+
+    <section class="mf007-bet-strip" aria-label="下注入口">
+      <div class="mf007-bet-strip-head">
+        <i class="fa-solid fa-up-right-from-square" aria-hidden="true"></i>
+        <span>下注說明</span>
+      </div>
+      <p class="mf007-bet-strip-desc">
+        <strong>實際下注在馬會網頁完成。</strong>您截圖裡那種介面（左側彩池、馬號格、金額格、<strong>加入注項／發送注項</strong> 等）是<strong>注入在投注網頁畫面上</strong>的，不會出現在點圖示打開的這個小視窗裡。請用下方按鈕打開馬會投注頁，進入場次後即可看到；並請先展開底部「<strong>快速投注設定與登入</strong>」完成帳戶登入與各彩池投注額設定。
+      </p>
+      <div class="mf007-bet-strip-actions">
+        <button type="button" class="mf007-btn mf007-btn-bet" id="portal-open-bet">開啟馬會投注</button>
+        <button type="button" class="mf007-btn mf007-btn-bet-secondary" id="portal-open-speedbet">開啟 SpeedBet</button>
+      </div>
+    </section>
+
+    <p class="mf007-hint">通行證狀態會在您於下方「快速投注設定與登入」完成登入後，自動同步至此（與舊版邏輯共用資料）。姓名與電話請以官網帳戶頁為準。</p>
+
+    <main class="mf007-card">
+      <h2 class="mf007-section-title"><i class="fa-solid fa-id-card"></i>帳戶資料</h2>
+      <dl class="mf007-dl">
+        <div class="mf007-dl-row"><dt>會員帳號</dt><dd id="portal-custid">—</dd></div>
+        <div class="mf007-dl-row"><dt>姓名</dt><dd id="portal-name">—</dd></div>
+        <div class="mf007-dl-row"><dt>電郵地址</dt><dd id="portal-email">—</dd></div>
+        <div class="mf007-dl-row"><dt>電話號碼</dt><dd id="portal-phone">—</dd></div>
+        <div class="mf007-dl-row"><dt>賽馬日通行證</dt><dd id="portal-raceday-pass" class="mf007-highlight">—</dd></div>
+        <div class="mf007-dl-row"><dt>聰明投注通行證</dt><dd id="portal-smart-pass" class="mf007-highlight">—</dd></div>
+        <div class="mf007-dl-row"><dt>海外 · 賽馬日通行證</dt><dd id="portal-os-raceday">—</dd></div>
+        <div class="mf007-dl-row"><dt>海外 · 聰明投注通行證</dt><dd id="portal-os-smart">—</dd></div>
+      </dl>
+      <div class="mf007-actions">
+        <button type="button" class="mf007-btn" id="portal-logout">登出</button>
+        <button type="button" class="mf007-btn mf007-btn-outline" id="portal-purchase-toggle" aria-expanded="false" aria-controls="portal-purchase-panel">購買記錄</button>
+        <a class="mf007-btn mf007-btn-outline" href="https://www.moneyflow007.com" target="_blank" rel="noopener">海外賽事</a>
+      </div>
+
+      <div id="portal-purchase-panel" class="mf007-purchase-panel" hidden>
+        <table class="mf007-purchase-table" aria-label="近十次訂閱計劃">
+          <thead>
+            <tr>
+              <th scope="col">近十次訂閱計劃</th>
+              <th scope="col">到期日</th>
+              <th scope="col" class="mf007-purchase-th-amt">金額</th>
+            </tr>
+          </thead>
+          <tbody id="portal-purchase-tbody"></tbody>
+        </table>
+        <p id="portal-purchase-empty" class="mf007-purchase-empty" hidden></p>
+        <p class="mf007-purchase-foot">
+          <a href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">官網完整購買記錄</a>
+        </p>
+      </div>
+
+      <hr class="mf007-divider" />
+      <h2 class="mf007-section-title"><i class="fa-solid fa-graduation-cap"></i>教學與功能</h2>
+      <div class="mf007-quick">
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener">投注教室</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener">大戶投注範圍統計</a>
+        <a href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">服務計劃及定價</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener">下載中心</a>
+        <a href="https://www.moneyflow007.com" target="_blank" rel="noopener">聰明投注</a>
+      </div>
+
+      <hr class="mf007-divider" />
+      <h2 class="mf007-section-title"><i class="fa-solid fa-receipt"></i>選擇訂閱計劃</h2>
+      <div class="mf007-promo">
+        <label for="portal-promo">優惠碼</label>
+        <input type="text" id="portal-promo" placeholder="輸入優惠碼" maxlength="64" autocomplete="off" />
+        <button type="button" class="mf007-btn" id="portal-redeem">兌換</button>
+      </div>
+      <div class="mf007-plan-list">
+        <article class="mf007-plan">
+          <div>
+            <div class="mf007-plan-name">一次賽馬日系統通行證</div>
+            <div class="mf007-plan-meta">到期日僅供示意，以官網為準</div>
+          </div>
+          <div class="mf007-plan-price">HK$330</div>
+          <a class="mf007-btn" href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">購買</a>
+        </article>
+        <article class="mf007-plan">
+          <div>
+            <div class="mf007-plan-name">四次賽馬日系統通行證</div>
+            <div class="mf007-plan-meta">到期日僅供示意，以官網為準</div>
+          </div>
+          <div class="mf007-plan-price">HK$1100</div>
+          <a class="mf007-btn" href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">購買</a>
+        </article>
+        <article class="mf007-plan">
+          <div>
+            <div class="mf007-plan-name">八次賽馬日系統通行證</div>
+            <div class="mf007-plan-meta">到期日僅供示意，以官網為準</div>
+          </div>
+          <div class="mf007-plan-price">HK$2200</div>
+          <a class="mf007-btn" href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">購買</a>
+        </article>
+        <article class="mf007-plan">
+          <div>
+            <div class="mf007-plan-name">16次賽馬日系統通行證</div>
+            <div class="mf007-plan-meta">到期日僅供示意，以官網為準</div>
+          </div>
+          <div class="mf007-plan-price">HK$4400</div>
+          <a class="mf007-btn" href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">購買</a>
+        </article>
+        <article class="mf007-plan">
+          <div>
+            <div class="mf007-plan-name">全季賽馬日系統通行證</div>
+            <div class="mf007-plan-meta">詳情請見官網訂閱頁</div>
+          </div>
+          <div class="mf007-plan-price">—</div>
+          <a class="mf007-btn" href="https://www.moneyflow007.com/Login" target="_blank" rel="noopener">購買</a>
+        </article>
+      </div>
+    </main>
+
+    <details class="mf007-advanced">
+      <summary>快速投注設定與登入（進階）</summary>
+      <div class="legacy-inner">
+      <div class="contentBorder">
+      <div class='logoDiv'>
+        <a href="https://www.moneyflow007.com" target="_blank" class="logo" style="margin-left:-71px;margin-top:12px"><img src="https://www.moneyflow007.com/images/mf007Logo.png" style="border:0;width:50px;height:50px" /></a>
+        <a href="https://www.moneyflow007.com" target="_blank" class="logo" style="font-size:10px;margin-top:22px;margin-left:-14px;letter-spacing:-0.5px">MoneyFlow 007</a>
+        <a href="https://www.moneyflow007.com" target="_blank" class="logo" style="font-size:16px;font-weight:700;margin-top:34px;margin-left:-15px;letter-spacing:1px">賽馬熱錢流</a>
+      </div>
+      <div id='loading' class='loading'>
+        <i class="fas fa-spinner fa-2x fa-spin"></i>
+      </div>
+      <div id='loginDiv' style="padding:10px 20px 0 20px;display:none">
+        <div id="newVersion" class="alertMessage" role="alert" style='display:none'></div>
+        <div id="login_error" class="alertMessage" role="alert" style='display:none'>
+            <i class="fa fa-exclamation-triangle" aria-hidden="true"></i> &nbsp;
+            輸入的資料與我們的紀錄不符。</div>
+        <div class="login-field-title">電郵地址</div>
+        <div class="login-field-input">
+            <input type="email" id="login-email" class="login-input" maxlength="40" value="" />
+        </div>
+        <div class="login-field-title">密碼</div>
+        <div class="login-field-input">
+            <input type="password" id="login-pwd" class="login-input" maxlength="40" value="" />
+        </div>
+        <div class="btn-content">
+            <a href="https://www.moneyflow007.com/Login" target="_blank" id="fp-Btn" class="link">忘記密碼?</a>
+        </div>
+        <div class="btn-content" style="margin:10px 0">
+            <a href="javascript:void(0)" class="bbtn" id="login-btn">登入</a>
+        </div>
+        <div class="btn-content" style="margin:10px 0 20px 0;text-align:center">
+            <a href="https://www.moneyflow007.com/Login" target="_blank" class="link2" id="new-btn">建立新帳戶</a>
+        </div>
+
+      </div>
+      <div id='settingDiv' style="padding:0px 20px;display:none">
+        <table border='0' class='displayDiv' cellPadding="0" cellSpacing="0">
+          <tr>
+            <td><div style='margin-bottom:5px'>會員帳號</div></td>
+            <td><div id='dd_custid' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr style='display:none'>
+            <td><div style='margin-bottom:5px'>電郵地址</div></td>
+            <td><div id='dd_email' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr class='mf007_memberSection'><td colspan='2'><div class='mf007_hr-text' data-content='本地賽事'></div></td></tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>賽馬日通行證</div></td>
+            <td><div id='dd_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>聰明投注通行證</div></td>
+            <td><div id='qb_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr class='mf007_memberSection'><td colspan='2'><div class='mf007_hr-text' data-content='海外賽事'></div></td></tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>賽馬日通行證</div></td>
+            <td><div id='scdd_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>聰明投注通行證</div></td>
+            <td><div id='scqb_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <div id="purchaseBtn" class='btn-content' style='margin-top:10px'><a href='https://www.moneyflow007.com/Login' target='_blank' class='bbtn'>購買通行證</a></div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <div>
+                <select id="betListType" class="bltype">
+                  <option value="w">獨贏 / 位置 投注額設定</option>
+                  <option value="wr">獨贏 回扣額度設定</option>
+                  <option value="q">連贏 / 位置Q 投注額設定</option>
+                  <option value="qr">連贏 / 位置Q 回扣額度設定</option>
+                  <option value="fct">二重彩 投注額設定</option>
+                  <option value="tce">三重彩 投注額設定</option>
+                  <option value="tri">單T 投注額設定</option>
+                  <option value="ff">四連環 投注額設定</option>
+                  <option value="qtt">四重彩 投注額設定</option>
+                  <option value="dbl">孖寶 投注額設定</option>
+                  <option value="ex">其他 投注額設定</option>
+                  <option value="pc">有波加注設定</option>
+                  <option value="other">一般設定</option>
+                </select>
+              </div>
+              <hr />
+              <div id="wpBetList" class="blArea"></div>
+              <div id="wprBetList" class="blArea" style="display:none"></div>
+              <div id="qpBetList" class="blArea" style="display:none"></div>
+              <div id="qprBetList" class="blArea" style="display:none"></div>
+              <div id="fctBetList" class="blArea" style="display:none"></div>
+              <div id="tceBetList" class="blArea" style="display:none"></div>
+              <div id="triBetList" class="blArea" style="display:none"></div>
+              <div id="ffBetList" class="blArea" style="display:none"></div>
+              <div id="qttBetList" class="blArea" style="display:none"></div>
+              <div id="dblBetList" class="blArea" style="display:none"></div>
+              <div id="exBetList" class="blArea" style="display:none"></div>
+              <div id="pcBetList" class="blArea" style="display:none"></div>
+              <div id="otherList" class="blArea" style="display:none">
+                <table class="otherTB" cellPadding="0" cellSpacing="0">
+                  <tr>
+                    <td>投注種類語言</td>
+                    <td><span id="otherEng"></span></td>
+                  </tr>
+                  <tr>
+                    <td>大戶投注範圍</td>
+                    <td><span id="otherRange"></span></td>
+                  </tr>
+                  <tr style='display:none'>
+                    <td>儲存記錄直接加入注項</td>
+                    <td><span id="otherCopy"></span></td>
+                  </tr>
+                  <tr>
+                    <td>保持登入狀態</td>
+                    <td><span id="otherSC"></span></td>
+                  </tr>
+                  <tr>
+                    <td>自動發送功能</td>
+                    <td><span id="otherAutoBet"></span></td>
+                  </tr>
+                  <tr>
+                    <td colspan='2'>
+                      <div class='mf007_qbWarning'>
+                        <div>自動發送功能免責聲明</div>
+                        此功能將會免除發送注項時的確認程序從而達致快速投注的目的。如不慎使用，本公司不會承擔，不會賠償使用此功能之任何損失。如不同意，請不要使用此項功能。
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <table class="otherTB" cellPadding="0" cellSpacing="0">
+                <tr>
+                  <td style='padding:10px 10px 0 0;width:50%;'><a href="" class="b2btn" id="save-btn">儲存</i></a></td>
+                  <td style='padding:10px 0 0 10px;width:50%;'><a href="" class="b2btn logout-btn" id="logout-btn">登出</a></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </div>
+      <div class='footer'>
+        <a href="https://www.facebook.com/moneyflow007/" target="_blank">
+          <i class="fa-brands fa-square-facebook" style="font-size:18px"></i>
+        </a>
+        <a href="https://www.instagram.com/money_flow_007_hk/" target="_blank">
+          <i class="fa-brands fa-square-instagram" style="font-size:18px"></i>
+        </a>
+        <a href="https://www.youtube.com/c/MoneyFlow007" target="_blank">
+          <i class="fa-brands fa-square-youtube" style="font-size:18px"></i>
+        </a>
+        <a href="https://www.moneyflow007.com" target="_blank">
+          <i class="fa fa-globe"></i>
+        </a>
+        <div class="footer2">
+          <a href="https://www.moneyflow007.com/qb_privacy.aspx" style="font-size:0.7rem" target="_blank">免責聲明</a>
+        </div>
+        <div id="appver" style="display:inline-block;"></div>
+      </div>
+    </div>
+
+      </div>
+    </details>
+  </div>
+  <script src="portal.js"></script>
+  <script src="popup-legacy.js"></script>
+</body>
+</html>

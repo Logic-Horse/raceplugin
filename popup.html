@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>賽馬熱錢流快速投注系統</title>
+    <script src="/jquery.js"></script>
+    <script src="/popup.js"></script>
+    <script src="/fontawesome.js"></script>
+    <style>
+      body {margin:0;font-family:Arial,sans-serif;}
+      .contentBorder {width:300px;border:1px solid black}
+      .logoDiv {width:100%;text-align:center;position:relative;overflow:auto;height:70px}
+      a.logo, a.logo:link, a.logo:visited, a.logo:active, a.logo:hover {
+        vertical-align: bottom;
+        position: absolute;
+        text-decoration:none;
+        color:#536e7a;
+      }
+      .alertMessage {
+        color:#ca2a2a;
+        font-size:12px;
+        margin-bottom:10px;
+        padding: 6px 0;
+        text-align: center;
+        border:1px solid #ca2a2a;
+        border-radius: 4px;
+        background-color: #fff;
+      }
+      .login-field-title {
+          color:#333;
+          font-size:12px;
+          font-weight:400;
+          line-height:1.4;
+          display:block;
+          padding-bottom:3px;
+      }
+      .login-field-input input {
+          font-size:14px;
+          width:239px;
+          padding:6px 10px;
+          border:1px solid #bfbfbf;
+          border-radius:4px;
+          -webkit-appearance: none; -moz-appearance: none;
+          margin-bottom:10px;
+      }
+      .btn-content .link, .btn-content .link:link, .btn-content .link:visited, .btn-content .link:active {
+          color:#0654ba;
+          text-decoration:none;
+          font-size:12px;
+      }
+      .btn-content .link2, .btn-content .link2:link, .btn-content .link2:visited, .btn-content .link2:active {
+          color:#0654ba;
+          text-decoration:none;
+          font-size:13px;
+      }
+      .btn-content {
+          width:100%;
+          overflow:hidden;
+      }
+      .btn-content .link:hover {color:#ca2a2a;}
+      .btn-content .link2:hover {color:#ca2a2a;}
+      .btn-content-left {float:left;position:relative;width:47%;}
+      .btn-content-right {float:right;position:relative;width:47%;}
+      .bbtn, .bbtn:link, .bbtn:hover, .bbtn:visited, .bbtn:active {
+          background-color:#536e7a;
+          display:block;
+          text-align:center;
+          text-decoration:none;
+          padding:8px 0;
+          color:#fff;
+          font-size:14px;
+          border:1px solid #536e7a;
+          border-radius:4px;
+      }
+      .displayDiv {
+        width:100%;
+        font-size: 14px;
+      }
+      .b2btn, .b2btn:link, .b2btn:hover, .b2btn:visited, .b2btn:active {
+          background-color:#536e7a;
+          display:block;
+          text-align:center;
+          text-decoration:none;
+          padding:8px 0;
+          color:#fff;
+          font-size:13px;
+          border:1px solid #536e7a;
+          border-radius:4px;
+          margin-top:10px 0 20px 0;
+      }
+      hr {
+        border: none;
+        height: 1px;
+        color:#999;
+        background-color: #999;
+        margin-bottom:5px
+      }
+      .displayTopDiv {
+        width:100%;
+        font-size: 12px;
+        margin-top:20px;
+        margin-bottom: 0px;
+      }
+      .displayTopDiv td {vertical-align: top}
+      .footer {
+        text-align: center;
+        margin-top:20px;
+        margin-bottom: 20px;
+      }
+      .footer a, .footer a:link, .footer a:visited, .footer a:active {
+        color: #536e7a;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 1.0rem;
+        margin-right:10px;
+      }
+      .footer a:hover {
+        color: #990000;
+      }
+      .infoTitle {
+        font-size:12px;
+        border:1px solid #666;
+        border-radius: 2px;
+        padding: 1px 6px;
+        white-space:nowrap;
+        margin-right:15px
+      }
+      .infoLine {
+        line-height: 15px;
+        margin-bottom:15px
+      }
+      .loading {
+        text-align: center;
+        margin:20px 0 40px 0;
+      }
+
+      body.dragging, body.dragging * {
+        cursor: move !important;
+      }
+
+      .dragged {
+        position: absolute;
+        opacity: 0.5;
+        z-index: 2000;
+        border:0;
+      }
+
+      ul {
+        list-style-type: none;
+        cursor: move !important;
+        margin:0;
+        padding:0;
+        float:left;
+      }
+      ul li {
+        float:left;
+        border:1px solid #666;
+        border-radius: 2px;
+        margin-right:5px;
+        height:20px;
+        line-height: 20px;
+        padding: 0 8px;
+        text-align: center;
+      }
+      ul.example li.placeholder {
+        list-style-type: none;
+        cursor: move !important;
+        position: relative;
+
+      }
+      ul.example li.placeholder:before {
+        position: absolute;
+        list-style-type: none;
+        cursor: move !important;
+      }
+
+      a.mf007_close-icon2,a.mf007_close-icon2:link,a.mf007_close-icon2:visited,a.mf007_close-icon2:active {
+        display:block;
+        box-sizing:border-box;
+        width:16px;
+        height:16px;
+        border:3px solid #333;
+        border-radius:100%;
+        background: -webkit-linear-gradient(-45deg, transparent 0%, transparent 46%, white 46%,  white 56%,transparent 56%, transparent 100%), -webkit-linear-gradient(45deg, transparent 0%, transparent 46%, white 46%,  white 56%,transparent 56%, transparent 100%);
+        background-color:#333;
+        text-decoration: none;
+      }
+      a.mf007_close-icon2:hover {
+        border:3px solid #990000;
+        background-color:#990000;
+      }
+      .setTable {
+        width:100%;
+        border:1px;
+      }
+      .setTable td {
+        width:50%;
+        vertical-align: top;
+      }
+      .wpBetItem {
+        margin-right:5px;
+        border:1px solid #999;
+        border-radius: 4px;
+        background-color: #fff;
+        padding:6px 4px;
+        margin-bottom: 4px;
+        float:left;
+        width:115px;
+      }
+      .qpBetItem {
+        margin-right:5px;
+        border:1px solid #999;
+        border-radius: 4px;
+        background-color: #fff;
+        padding:6px 4px;
+        margin-bottom: 4px;
+        float:left;
+        width:114px;
+      }
+      .exBetItem {
+        margin-right:5px;
+        border:1px solid #999;
+        border-radius: 4px;
+        background-color: #fff;
+        padding:6px 4px;
+        margin-bottom: 4px;
+        float:left;
+        width:110px;
+      }
+      a.wpRemove,a.wpRemove:link,a.wpRemove:visited,a.wpRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.wpRemove:hover {
+        color:#990000;
+      }
+      a.qpRemove,a.qpRemove:link,a.qpRemove:visited,a.qpRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.qpRemove:hover {
+        color:#990000;
+      }
+      a.tceRemove,a.tceRemove:link,a.tceRemove:visited,a.tceRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.tceRemove:hover {
+        color:#990000;
+      }
+      a.triRemove,a.triRemove:link,a.triRemove:visited,a.triRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.triRemove:hover {
+        color:#990000;
+      }
+      a.ffRemove,a.ffRemove:link,a.ffRemove:visited,a.ffRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.ffRemove:hover {
+        color:#990000;
+      }
+      a.qttRemove,a.qttRemove:link,a.qttRemove:visited,a.qttRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.qttRemove:hover {
+        color:#990000;
+      }
+      a.fctRemove,a.fctRemove:link,a.fctRemove:visited,a.fctRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.fctRemove:hover {
+        color:#990000;
+      }
+      a.dblRemove,a.dblRemove:link,a.dblRemove:visited,a.dblRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.dblRemove:hover {
+        color:#990000;
+      }
+      a.exRemove,a.exRemove:link,a.exRemove:visited,a.exRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.exRemove:hover {
+        color:#990000;
+      }
+      a.pcRemove,a.pcRemove:link,a.pcRemove:visited,a.pcRemove:active {
+        float:right;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin-top:2px;
+      }
+      a.pcRemove:hover {
+        color:#990000;
+      }
+      .wbet-field-input input {
+          font-size:13px;
+          width:85px;
+          padding:8px;
+          border:1px solid #999;
+          border-radius:4px;
+          -webkit-appearance: none; -moz-appearance: none;
+          height:15px;
+          float:left;
+      }
+      a.wbetInput,a.wbetInput:link,a.wbetInput:visited,a.wbetInput:active {
+        float:left;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin:9px 0 0 5px
+      }
+      a.wbetInput:hover {
+        color:#990000;
+      }
+      .qbet-field-input input {
+          font-size:13px;
+          width:85px;
+          padding:8px;
+          border:1px solid #999;
+          border-radius:4px;
+          -webkit-appearance: none; -moz-appearance: none;
+          height:15px;
+          float:left;
+      }
+      a.qbetInput,a.qbetInput:link,a.qbetInput:visited,a.qbetInput:active {
+        float:left;
+        text-decoration: none;
+        color:#333;
+        font-size: 14px;
+        margin:9px 0 0 5px
+      }
+      a.qbetInput:hover {
+        color:#990000;
+      }
+      .pcbet-field-input {
+        clear:both;
+      }
+      .pcbet-field-input input {
+        font-size:13px;
+        width:65px;
+        padding:7px 8px 6px 8px;
+        border:1px solid #999;
+        border-radius:4px;
+        -webkit-appearance: none; -moz-appearance: none;
+        height:15px;
+        float:left;
+      }
+      .bltype {
+        padding: 4px 4px 6px 4px;
+        font-size: 14px;
+        border-radius: 4px;
+        margin-top:10px;
+      }
+      .otherTB {
+        width:100%;
+        margin-top:5px;
+      }
+      .otherTB td {
+        padding-bottom:10px;
+        white-space: nowrap;
+      }
+      .otherTB td:first {
+        padding-right:10px;
+      }
+      .footer2 {
+        display:inline-block;
+      }
+      .styleDiv {
+        background-color: #fff;
+        padding:5px 8px;
+        border:1px solid #999;
+        border-radius:4px;
+        -webkit-appearance: none; -moz-appearance: none;
+        margin-bottom:10px;
+        font-size:14px;
+        margin-top:10px;
+      }
+      .dn {display: none}
+      .mf007_qbWarning {
+        width: 100%;
+        white-space: normal;
+        border:1px solid #990000;
+        color:#990000;
+        border-radius: 4px;
+        padding:5px;
+        text-align: left;
+        font-size: 12px;
+        font-weight: 500 !important;
+        font-family:Noto Sans TC,Arial,sans-serif !important;
+      }
+
+      .mf007_qbWarning div {
+        text-align: center;
+        font-size: 12px;
+        font-weight: 500 !important;
+        font-family:Noto Sans TC,Arial,sans-serif !important;
+        margin-bottom: 5px;
+      }
+      .mf007_hr-text {
+        position: relative;
+        border: none;
+        border-top: 1px solid #ccc;
+        text-align: center;
+        margin: 10px 0 0 0;
+      }
+
+      .mf007_hr-text::after {
+        content: attr(data-content);
+        position: relative;
+        top: -0.7em;
+        background: #eee;
+        padding: 0 0.5em;
+        color: #333;
+        font-size: 13px;
+        font-family:Noto Sans TC,Arial,sans-serif;
+      }
+    </style>
+  </head>
+  <body style='background-color:#eee;'>
+    <div class="contentBorder">
+      <div class='logoDiv'>
+        <a href="https://www.moneyflow007.com" target="_blank" class="logo" style="margin-left:-71px;margin-top:12px"><img src="https://www.moneyflow007.com/images/mf007Logo.png" style="border:0;width:50px;height:50px" /></a>
+        <a href="https://www.moneyflow007.com" target="_blank" class="logo" style="font-size:10px;margin-top:22px;margin-left:-14px;letter-spacing:-0.5px">MoneyFlow 007</a>
+        <a href="https://www.moneyflow007.com" target="_blank" class="logo" style="font-size:16px;font-weight:700;margin-top:34px;margin-left:-15px;letter-spacing:1px">賽馬熱錢流</a>
+      </div>
+      <div id='loading' class='loading'>
+        <i class="fas fa-spinner fa-2x fa-spin"></i>
+      </div>
+      <div id='loginDiv' style="padding:10px 20px 0 20px;display:none">
+        <div id="newVersion" class="alertMessage" role="alert" style='display:none'></div>
+        <div id="login_error" class="alertMessage" role="alert" style='display:none'>
+            <i class="fa fa-exclamation-triangle" aria-hidden="true"></i> &nbsp;
+            輸入的資料與我們的紀錄不符。</div>
+        <div class="login-field-title">電郵地址</div>
+        <div class="login-field-input">
+            <input type="email" id="login-email" class="login-input" maxlength="40" value="" />
+        </div>
+        <div class="login-field-title">密碼</div>
+        <div class="login-field-input">
+            <input type="password" id="login-pwd" class="login-input" maxlength="40" value="" />
+        </div>
+        <div class="btn-content">
+            <a href="https://www.moneyflow007.com/Login" target="_blank" id="fp-Btn" class="link">忘記密碼?</a>
+        </div>
+        <div class="btn-content" style="margin:10px 0">
+            <a href="javascript:void(0)" class="bbtn" id="login-btn">登入</a>
+        </div>
+        <div class="btn-content" style="margin:10px 0 20px 0;text-align:center">
+            <a href="https://www.moneyflow007.com/Login" target="_blank" class="link2" id="new-btn">建立新帳戶</a>
+        </div>
+
+      </div>
+      <div id='settingDiv' style="padding:0px 20px;display:none">
+        <table border='0' class='displayDiv' cellPadding="0" cellSpacing="0">
+          <tr>
+            <td><div style='margin-bottom:5px'>會員帳號</div></td>
+            <td><div id='dd_custid' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr style='display:none'>
+            <td><div style='margin-bottom:5px'>電郵地址</div></td>
+            <td><div id='dd_email' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr class='mf007_memberSection'><td colspan='2'><div class='mf007_hr-text' data-content='本地賽事'></div></td></tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>賽馬日通行證</div></td>
+            <td><div id='dd_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>聰明投注通行證</div></td>
+            <td><div id='qb_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr class='mf007_memberSection'><td colspan='2'><div class='mf007_hr-text' data-content='海外賽事'></div></td></tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>賽馬日通行證</div></td>
+            <td><div id='scdd_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr>
+            <td><div style='margin-bottom:5px'>聰明投注通行證</div></td>
+            <td><div id='scqb_expire' style='margin-bottom:5px'></div></td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <div id="purchaseBtn" class='btn-content' style='margin-top:10px'><a href='https://www.moneyflow007.com/Login' target='_blank' class='bbtn'>購買通行證</a></div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <div>
+                <select id="betListType" class="bltype">
+                  <option value="w">獨贏 / 位置 投注額設定</option>
+                  <option value="wr">獨贏 回扣額度設定</option>
+                  <option value="q">連贏 / 位置Q 投注額設定</option>
+                  <option value="qr">連贏 / 位置Q 回扣額度設定</option>
+                  <option value="fct">二重彩 投注額設定</option>
+                  <option value="tce">三重彩 投注額設定</option>
+                  <option value="tri">單T 投注額設定</option>
+                  <option value="ff">四連環 投注額設定</option>
+                  <option value="qtt">四重彩 投注額設定</option>
+                  <option value="dbl">孖寶 投注額設定</option>
+                  <option value="ex">其他 投注額設定</option>
+                  <option value="pc">有波加注設定</option>
+                  <option value="other">一般設定</option>
+                </select>
+              </div>
+              <hr />
+              <div id="wpBetList" class="blArea"></div>
+              <div id="wprBetList" class="blArea" style="display:none"></div>
+              <div id="qpBetList" class="blArea" style="display:none"></div>
+              <div id="qprBetList" class="blArea" style="display:none"></div>
+              <div id="fctBetList" class="blArea" style="display:none"></div>
+              <div id="tceBetList" class="blArea" style="display:none"></div>
+              <div id="triBetList" class="blArea" style="display:none"></div>
+              <div id="ffBetList" class="blArea" style="display:none"></div>
+              <div id="qttBetList" class="blArea" style="display:none"></div>
+              <div id="dblBetList" class="blArea" style="display:none"></div>
+              <div id="exBetList" class="blArea" style="display:none"></div>
+              <div id="pcBetList" class="blArea" style="display:none"></div>
+              <div id="otherList" class="blArea" style="display:none">
+                <table class="otherTB" cellPadding="0" cellSpacing="0">
+                  <tr>
+                    <td>投注種類語言</td>
+                    <td><span id="otherEng"></span></td>
+                  </tr>
+                  <tr>
+                    <td>大戶投注範圍</td>
+                    <td><span id="otherRange"></span></td>
+                  </tr>
+                  <tr style='display:none'>
+                    <td>儲存記錄直接加入注項</td>
+                    <td><span id="otherCopy"></span></td>
+                  </tr>
+                  <tr>
+                    <td>保持登入狀態</td>
+                    <td><span id="otherSC"></span></td>
+                  </tr>
+                  <tr>
+                    <td>自動發送功能</td>
+                    <td><span id="otherAutoBet"></span></td>
+                  </tr>
+                  <tr>
+                    <td colspan='2'>
+                      <div class='mf007_qbWarning'>
+                        <div>自動發送功能免責聲明</div>
+                        此功能將會免除發送注項時的確認程序從而達致快速投注的目的。如不慎使用，本公司不會承擔，不會賠償使用此功能之任何損失。如不同意，請不要使用此項功能。
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <table class="otherTB" cellPadding="0" cellSpacing="0">
+                <tr>
+                  <td style='padding:10px 10px 0 0;width:50%;'><a href="" class="b2btn" id="save-btn">儲存</i></a></td>
+                  <td style='padding:10px 0 0 10px;width:50%;'><a href="" class="b2btn logout-btn" id="logout-btn">登出</a></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </div>
+      <div class='footer'>
+        <a href="https://www.facebook.com/moneyflow007/" target="_blank">
+          <i class="fa-brands fa-square-facebook" style="font-size:18px"></i>
+        </a>
+        <a href="https://www.instagram.com/money_flow_007_hk/" target="_blank">
+          <i class="fa-brands fa-square-instagram" style="font-size:18px"></i>
+        </a>
+        <a href="https://www.youtube.com/c/MoneyFlow007" target="_blank">
+          <i class="fa-brands fa-square-youtube" style="font-size:18px"></i>
+        </a>
+        <a href="https://www.moneyflow007.com" target="_blank">
+          <i class="fa fa-globe"></i>
+        </a>
+        <div class="footer2">
+          <a href="https://www.moneyflow007.com/qb_privacy.aspx" style="font-size:0.7rem" target="_blank">免責聲明</a>
+        </div>
+        <div id="appver" style="display:inline-block;"></div>
+      </div>
+    </div>
+
+  </body>
+</html>
