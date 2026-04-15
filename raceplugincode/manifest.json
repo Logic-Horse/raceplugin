@@ -4,10 +4,10 @@
     "version": "10.0.0",
     "manifest_version": 3,
     "icons": {
-        "16": "iconOn.png",
-        "32": "iconOn.png",
-        "48": "iconOn.png",
-        "128": "iconOn.png"
+        "16": "racep_pugin_logo.png",
+        "32": "racep_pugin_logo.png",
+        "48": "racep_pugin_logo.png",
+        "128": "racep_pugin_logo.png"
     },
     "background": {
         "service_worker": "background.js"
@@ -16,10 +16,10 @@
         "default_title": "賽馬熱錢流 — 官網控制台",
         "default_popup": "popup.html",
         "default_icons": {
-            "16": "iconOn.png",
-            "32": "iconOn.png",
-            "48": "iconOn.png",
-            "128": "iconOn.png"
+            "16": "racep_pugin_logo.png",
+            "32": "racep_pugin_logo.png",
+            "48": "racep_pugin_logo.png",
+            "128": "racep_pugin_logo.png"
         }
     },
     "permissions": [
