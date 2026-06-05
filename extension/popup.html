@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>注單面板</title>
+    <link rel="stylesheet" href="popup.css" />
+    <script src="panel-shell.js"></script>
+  </head>
+  <body>
+    <div class="view-boot" id="view-boot" role="status" aria-live="polite" aria-busy="true">
+      <div class="view-boot__inner">正在恢復登入…</div>
+    </div>
+    <div class="auth" id="view-login" hidden>
+      <div class="auth__card">
+        <div class="auth__brand">
+          <div class="auth__title">賽馬注單助手</div>
+          <div class="auth__sub">登入後才能使用</div>
+        </div>
+
+        <form class="auth__form" id="login-form">
+          <label class="field" hidden>
+            <span class="field__label">伺服器</span>
+            <input class="field__input" id="login-base" inputmode="url" placeholder="http://18.162.150.191:8080" />
+          </label>
+          <label class="field">
+            <span class="field__label">用戶名</span>
+            <input class="field__input" id="login-username" autocomplete="username" required />
+          </label>
+          <label class="field">
+            <span class="field__label">密碼</span>
+            <input class="field__input" id="login-password" type="password" autocomplete="current-password" required />
+          </label>
+          <div class="auth__row">
+            <label class="chk">
+              <input type="checkbox" id="remember-username" checked />
+              記住帳號密碼
+            </label>
+          </div>
+          <div class="auth__error" id="login-error" hidden></div>
+          <button type="submit" class="auth__btn" id="btn-login">登入</button>
+        </form>
+
+        <div class="auth__hint">
+          如需驗證碼（`code/uuid`），後端會在錯誤資訊中提示；我們再按接口規則補齊驗證碼輸入。
+        </div>
+      </div>
+    </div>
+
+    <div class="app" id="view-app" hidden>
+      <header class="topbar">
+        <button type="button" class="topbar__race" id="btn-top-race" title="切換場次" aria-haspopup="true" aria-expanded="false">
+          <span class="topbar__venue">沙田</span>
+          <span class="topbar__date-wrap" id="topbar-date-wrap" hidden>
+            <span class="topbar__sep">·</span>
+            <span class="topbar__date" id="topbar-meeting-date"></span>
+          </span>
+          <span class="topbar__sep">-</span>
+          <span class="topbar__num">1</span>
+        </button>
+        <div class="race-popover" id="race-popover" hidden>
+          <div class="race-popover__title">選擇場次</div>
+          <div class="race-popover__list" id="race-popover-list"></div>
+        </div>
+        <div class="topbar__tools">
+          <button type="button" class="icon-btn" title="刷新" aria-label="刷新" id="btn-refresh-header">&#x21bb;</button>
+          <button type="button" class="icon-btn icon-btn--wide" title="在寬屏獨立窗口打開（約 880px，適合完整操作區）" aria-label="寬屏窗口" id="btn-wide-panel">寬</button>
+          <button type="button" class="icon-btn" title="賠率與發送設定" aria-label="設定" id="btn-settings">&#x2699;</button>
+          <button type="button" class="token-debug-btn" id="btn-copy-token" hidden title="複製當前 Token（Authorization，調試用）" aria-label="複製 Token">Token</button>
+          <button type="button" class="logout-btn" id="btn-logout" title="退出登入" aria-label="退出登入">退出</button>
+          <span class="badge" id="notify-badge" hidden title="當前注單項數">0</span>
+        </div>
+        <button type="button" class="topbar__wide-hint" id="btn-wide-panel-hint" title="在寬屏獨立窗口打開（約 880px）">
+          寬屏窗口
+        </button>
+        <button type="button" class="topbar__close" id="btn-close-hint" title="關閉（點擊外部或 Esc）">&#x2715;</button>
+      </header>
+
+      <div class="body">
+        <nav class="sidebar" id="nav-categories" aria-label="玩法分類"></nav>
+
+        <main class="workspace" id="workspace">
+          <div class="workspace__pick" id="workspace-pick">
+          <section class="race-panel" id="race-panel" aria-label="場次選擇" hidden>
+            <div class="race-panel__row" id="race-panel-date-row" hidden>
+              <span class="race-panel__label">賽馬日</span>
+              <div class="race-panel__venues" id="race-dates"></div>
+            </div>
+            <div class="race-panel__row">
+              <span class="race-panel__label">馬場</span>
+              <div class="race-panel__venues" id="race-venues"></div>
+            </div>
+            <div class="race-panel__row">
+              <span class="race-panel__label">場序</span>
+              <div class="race-panel__races" id="race-races"></div>
+            </div>
+            <p class="race-panel__hint" id="race-panel-hint">
+              先選<strong>賽馬日</strong>、<strong>馬場</strong>與<strong>場序</strong>（當日第幾場）。選好後請到「獨贏」「位置」「連贏」或「位置Q」用<strong>馬號</strong>選馬下注。
+            </p>
+          </section>
+          <section class="history-panel" id="history-panel" aria-label="注單記錄" hidden>
+            <header class="history-panel__head">
+              <span class="history-panel__title">注單記錄</span>
+              <button type="button" class="btn btn--sm btn--ghost" id="btn-history-refresh">刷新</button>
+            </header>
+            <p class="history-panel__meta" id="history-meta" hidden></p>
+            <p class="history-panel__empty" id="history-empty" hidden>暫無記錄，或請先登入。</p>
+            <ul class="history-list" id="history-list" role="list"></ul>
+          </section>
+          <div class="num-pick-summary" id="num-pick-summary" hidden>
+            <div class="num-pick-summary__inner">
+              <div class="num-pick-summary__main" id="num-pick-summary-main" aria-live="polite"></div>
+              <button
+                type="button"
+                class="num-pick-summary__clear"
+                id="btn-num-pick-summary-clear"
+                title="清空當前選號"
+                aria-label="清空當前選號"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <div class="num-grid" id="num-grid"></div>
+
+          <div class="qin-combo-inline" id="qin-combo-inline-wrap" hidden>
+            <div class="qin-combo-inline__bar">
+              <button
+                type="button"
+                class="qin-combo-inline__toggle"
+                id="btn-qin-combo-toggle"
+                aria-expanded="true"
+                aria-controls="qin-combo-inline-body"
+                title="收起連贏組合試算"
+              >
+                <span class="qin-combo-inline__chev" aria-hidden="true">▼</span>
+                <span class="qin-combo-inline__title">連贏組合試算</span>
+              </button>
+              <span class="qin-combo-inline__meta"><span id="q-meta">0 組</span></span>
+            </div>
+            <div class="qin-combo-inline__body" id="qin-combo-inline-body">
+              <div class="qin-combo-inline__summary panel__summary">
+                <div class="kv"><span class="kv__k">更新時間</span><span class="kv__v" id="q-ev">—</span></div>
+                <div class="kv"><span class="kv__k">來源</span><span class="kv__v" id="q-total">市場（演示）</span></div>
+                <div class="kv kv--span">
+                  <span class="kv__k">備註</span><span class="kv__v" id="q-payout">僅展示組合與示例數據，不構成投注建議</span>
+                </div>
+              </div>
+              <div class="table-wrap qin-combo-inline__table-wrap">
+                <table class="data-table data-table--compact" id="table-q">
+                  <thead>
+                    <tr>
+                      <th>組合</th>
+                      <th>QIN</th>
+                      <th>試算注</th>
+                      <th>預計派彩*</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="qin-combo-inline__subhead panel__subhead">位置 Q（QPL）</div>
+              <div class="table-wrap qin-combo-inline__table-wrap">
+                <table class="data-table data-table--compact" id="table-qpl">
+                  <thead>
+                    <tr>
+                      <th>組合</th>
+                      <th>QPL</th>
+                      <th>說明</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <p class="rule-hint" id="rule-hint" aria-live="polite"></p>
+
+          <div class="pool-options-row dutch-stake-row" id="dutch-stake-row" hidden>
+            <div class="dutch-stake-control" id="dutch-stake-control" data-mode="flat">
+              <span class="dutch-stake-control__label">注額分配</span>
+              <div
+                class="dutch-stake-seg"
+                id="dutch-stake-seg"
+                role="group"
+                aria-label="注額分配：平注或 Dutch 拆賬"
+              >
+                <button
+                  type="button"
+                  id="btn-dutch-flat"
+                  class="dutch-stake-seg__btn is-active"
+                  aria-pressed="true"
+                  title="平注：上方為每注金額"
+                >
+                  <span class="dutch-stake-seg__label">平注</span>
+                  <span class="dutch-stake-seg__sub">每注同額</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-dutch-on"
+                  class="dutch-stake-seg__btn dutch-stake-seg__btn--dutch"
+                  aria-pressed="false"
+                  title="Dutch：上方為本輪總投，按 W／P／QIN／QPL 拆賬（十位四捨五入）"
+                >
+                  <span class="dutch-stake-seg__label">Dutch</span>
+                  <span class="dutch-stake-seg__sub">總投拆賬</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="dutch-odds-banner"
+            id="dutch-odds-banner"
+            role="alert"
+            aria-live="polite"
+            hidden
+          ></div>
+
+          <div class="stake-custom-row" id="stake-custom-row">
+            <label class="stake-custom">
+              <span class="stake-custom__label" id="stake-custom-label">每注金額（港幣）</span>
+              <input
+                type="number"
+                class="stake-custom__input"
+                id="stake-custom"
+                min="1"
+                step="1"
+                inputmode="numeric"
+                autocomplete="off"
+              />
+            </label>
+          </div>
+
+          <div class="amount-grid" id="amount-grid"></div>
+
+          </div>
+
+          <div class="workspace__dock" id="workspace-dock">
+          <div class="status-line workspace__status">
+            <span>注數：<strong id="bet-count">0</strong></span>
+            <span>金額：<strong>$ <span id="bet-sum">0</span></strong></span>
+            <span class="status-line__odds" id="odds-ready-line" hidden></span>
+          </div>
+
+          <section class="bets" aria-label="注單列表">
+            <header class="bets__head">
+              <span class="bets__title">注單</span>
+              <span class="bets__tools">
+                <span class="bets__meta" id="slip-meta-wrap"><span id="slip-meta">0 項</span></span>
+                <button type="button" class="bets__clear" id="btn-slip-clear" title="清空注單" aria-label="清空注單">清空</button>
+              </span>
+            </header>
+            <div class="bets__list-wrap" id="bets-list-wrap">
+              <div class="bets__list" id="slip-list" role="list" tabindex="0" aria-label="注項列表，可滾動查看"></div>
+            </div>
+          </section>
+
+          <div class="action-row workspace__actions">
+            <div
+              class="action-feedback"
+              id="action-feedback"
+              hidden
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span class="action-feedback__icon" aria-hidden="true"></span>
+              <p class="action-feedback__text" id="action-feedback-text"></p>
+              <button type="button" class="action-feedback__close" id="action-feedback-close" aria-label="關閉提示">×</button>
+            </div>
+            <div class="action-row__btns">
+            <button type="button" class="btn btn--ghost" id="btn-add-bet">加入注項</button>
+            <button type="button" class="btn btn--ghost btn--clear-picks" title="清空當前選號" aria-label="清空當前選號" id="btn-trash">
+              <span class="btn__icon" aria-hidden="true">&#x1F5D1;</span>
+              清空選號
+            </button>
+            <button
+              type="button"
+              class="btn btn--ghost btn--hkjc"
+              id="btn-sync-hkjc"
+              title="半自動：寫入馬會投注區；成功後自動提交至已登入的後端服務（不代點馬會「發送注項」）"
+            >
+              同步到馬會
+            </button>
+            </div>
+          </div>
+          </div>
+        </main>
+
+        <aside class="panels" aria-label="分析結果">
+          <section class="panel panel--aside-history" id="aside-history-only" hidden aria-label="注單記錄詳情">
+            <header class="panel__head history-detail__head">
+              <span class="panel__title" id="history-detail-title">注單詳情</span>
+            </header>
+            <div class="aside-history-only__body">
+              <p class="history-detail-empty" id="history-detail-empty" hidden>
+                在左側選擇一條注單查看詳情；再次點擊已選條目可收起。
+              </p>
+              <article class="history-detail" id="history-detail" hidden aria-live="polite">
+                <div class="history-detail__badge" id="history-detail-badge" role="status"></div>
+                <dl class="history-detail__dl" id="history-detail-meta"></dl>
+                <div class="history-detail__alloc-head" id="history-detail-alloc-head">注額分配（港幣）</div>
+                <table class="history-detail__table" id="history-detail-table" hidden>
+                  <thead>
+                    <tr>
+                      <th scope="col">組合</th>
+                      <th scope="col">注額</th>
+                      <th scope="col">賠率</th>
+                    </tr>
+                  </thead>
+                  <tbody id="history-detail-tbody"></tbody>
+                  <tfoot id="history-detail-tfoot"></tfoot>
+                </table>
+                <details class="history-detail__json">
+                  <summary>接口原始 JSON</summary>
+                  <pre class="slip-api-preview__pre" id="history-detail-pre"></pre>
+                </details>
+              </article>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+    <div class="notify-stack" id="notify-stack" aria-live="polite" aria-relevant="additions"></div>
+
+    <div class="settings-popover" id="settings-popover" hidden>
+      <div class="settings-popover__backdrop" id="settings-popover-backdrop" aria-hidden="true"></div>
+      <div class="settings-popover__card" role="dialog" aria-labelledby="settings-popover-title">
+        <div class="settings-popover__head">
+          <span id="settings-popover-title">賠率與發送</span>
+          <button type="button" class="settings-popover__close" id="btn-close-settings" aria-label="關閉">×</button>
+        </div>
+        <div class="settings-popover__body">
+          <label class="settings-field settings-field--chk">
+            <input type="checkbox" id="settings-use-odds-api" checked />
+            <span>顯示馬格賠率（關閉則僅選號，不請求賠率接口）</span>
+          </label>
+          <label class="settings-field settings-field--chk">
+            <input type="checkbox" id="settings-odds-auto" />
+            <span>自動刷新本場賠率（popup 打開且本頁可見時）</span>
+          </label>
+          <label class="settings-field">
+            <span class="settings-field__label">自動刷新間隔</span>
+            <select class="settings-field__input" id="settings-odds-interval">
+              <option value="15">15 秒</option>
+              <option value="30" selected>30 秒</option>
+              <option value="60">60 秒</option>
+            </select>
+          </label>
+          <label class="settings-field settings-field--chk">
+            <input type="checkbox" id="settings-bet-autoconfirm" checked />
+            <span>同步馬會成功後提交後端時，自動確認注單（無需在記錄裡再點確認）</span>
+          </label>
+          <p class="settings-odds-status" id="settings-odds-status">—</p>
+          <div class="settings-popover__actions">
+            <button type="button" class="btn btn--ghost btn--sm" id="btn-save-settings">儲存</button>
+            <button type="button" class="btn btn--ghost btn--sm" id="btn-refresh-odds">刷新本場賠率</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
