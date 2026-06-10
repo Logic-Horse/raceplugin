@@ -1,4 +1,4 @@
-# Dependencies
+# Dependencies (npm / yarn / pnpm)
 node_modules/
 
 # macOS
@@ -8,7 +8,8 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# Environment
+# Environment & secrets
 .env
 .env.*
