@@ -1,5 +1,5 @@
 # Build output
-dist/
+# dist/
 
 # Dependencies (npm / yarn / pnpm)
 node_modules/
