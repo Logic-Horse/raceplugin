@@ -1,7 +1,7 @@
 /** 將 popup 的注單同步請求轉發至 bet.hkjc.com 分頁的 content script */
 const HKJC_ORIGIN = "https://bet.hkjc.com";
 /** 與 content-hkjc.js 的 SCRIPT_VERSION 保持一致；不符則強制重新注入 */
-const HKJC_CONTENT_SCRIPT_VERSION = 44;
+const HKJC_CONTENT_SCRIPT_VERSION = 46;
 const PANEL_PAGE = "popup.html";
 
 /** 類 MetaMask：點工具欄圖標打開 Chrome 右側邊欄，不遮擋馬會頁中央 */
@@ -324,7 +324,7 @@ async function handleSyncToHkjc(payload) {
   const path = parseHkjcRacePath(targetUrl);
   const sameRace = urlsMatchRace(tab.url, targetUrl);
   const sameMeeting = urlsMatchMeeting(tab.url, targetUrl);
-  const settleMs = path?.segment === "cross_alup" ? 800 : sameRace ? 100 : sameMeeting ? 350 : 600;
+  const settleMs = path?.segment === "cross_alup" ? 800 : sameRace ? 0 : sameMeeting ? 250 : 500;
   await sleep(settleMs);
   const result = await sendToContent(tab.id, payload);
   return result ?? { ok: false, error: "EMPTY_RESPONSE" };

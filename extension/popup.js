@@ -1620,16 +1620,12 @@
         );
         return;
       }
-      const backendNote = await submitBackendAfterHkjcSync(res, payload.syncScope);
-      if (res.mode === "direct-slip-fallback") {
-        toast(
-          `已加入馬會投注區 ${n} 項，請在馬會網站核對注項與金額後按「發送注項」${backendNote}`
-        );
-        return;
-      }
-      toast(
-        `已加入馬會投注區 ${n} 項，請在馬會網站核對注項與金額後按「發送注項」${backendNote}`
-      );
+      toast(`已加入馬會投注區 ${n} 項，請在馬會網站核對注項與金額後按「發送注項」`);
+      void submitBackendAfterHkjcSync(res, payload.syncScope).then((backendNote) => {
+        if (!backendNote) return;
+        const msg = backendNote.replace(/^[，。]+/, "").trim();
+        if (msg) toast(msg);
+      });
     } catch (e) {
       toast(`馬會同步失敗：${hkjcSyncErrorText(e?.message)}`);
     } finally {
