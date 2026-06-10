@@ -2,7 +2,7 @@
  * bet.hkjc.com：將插件注項同步至右側投注區（獨贏 / 位置 / 連贏 / 位置Q），不點擊「發送注項」。
  */
 (() => {
-  const SCRIPT_VERSION = 46;
+  const SCRIPT_VERSION = 44;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /** 條件滿足即返回，避免固定長 sleep */
@@ -94,12 +94,7 @@
   }
 
   const isCrossAlupPage = () => location.pathname.includes("cross_alup");
-  /** 同步會話中頁面已就緒時縮短 poll 間隔（applySlipViaUserClicks 內設置） */
-  let activeSyncFast = false;
-  const pollMs = () => {
-    if (activeSyncFast) return isCrossAlupPage() ? 26 : 18;
-    return isCrossAlupPage() ? 48 : 32;
-  };
+  const pollMs = () => (isCrossAlupPage() ? 48 : 32);
 
   /** 頂欄 #venue_ST / #venue_S1 / #venue_S2（div[role=button]） */
   function getCurrentVenueFromDom() {
@@ -225,41 +220,6 @@
       { interval: pollMs(), maxMs }
     );
     return Boolean(ok) || getCurrentRaceNoFromDom() === want;
-  }
-
-  /** 場次 Tab 與賠率表 checkbox 均已就緒（無需長 poll） */
-  function isRaceDomReady(raceNo) {
-    const want = Number(raceNo);
-    if (!Number.isFinite(want) || want < 1) return false;
-    if (getCurrentRaceNoFromDom() !== want) return false;
-    return Boolean(
-      document.querySelector(`#raceno_${want}.active`) ||
-        document.querySelector(`input[id^="wpleg_WIN_${want}_"]`) ||
-        document.querySelector(`input[id^="wpleg_QIN_${want}_"]`) ||
-        document.querySelector(`input[id^="wpleg_QPL_${want}_"]`)
-    );
-  }
-
-  async function ensureRaceReadyIfNeeded(raceNo, opts = {}) {
-    if (isRaceDomReady(raceNo)) return true;
-    return waitForRaceReady(raceNo, opts.maxMs ?? 2500);
-  }
-
-  function buildSyncPrepState(raceNo) {
-    return {
-      raceSettled: isRaceDomReady(raceNo),
-      wpqReady: isWpqPoolReadyInUi(),
-      qinSubTypeReady: isWpqPoolReadyInUi() && wpqSubTypeIs("QIN"),
-      qplSubTypeReady: isWpqPoolReadyInUi() && wpqSubTypeIs("QPL"),
-      winPoolReady: isWinPoolReadyInUi(),
-    };
-  }
-
-  /** poolReady / fast 時縮短 checkbox 間隔（頁面已就緒時 React 響應更快） */
-  function syncCbDelay(opts, fallback = 14) {
-    if (opts?.fast) return isCrossAlupPage() ? 8 : 4;
-    if (opts?.poolReady) return isCrossAlupPage() ? 10 : 6;
-    return fallback;
   }
 
   /** 嘗試 SPA 改址不整頁 reload，較不易觸發「離開此網站？」 */
@@ -414,37 +374,16 @@
     targetUrl
   ) {
     const needWpFirst = winFinal.length > 0 || plaFinal.length > 0;
-    const needQin = qinFinal.length > 0;
-    const needQpl = qplFinal.length > 0;
 
     if (needWpFirst) {
       await ensureWinPoolTab({ soft: false });
-    } else if (needQin || needQpl) {
-      await ensureWpqPoolReady({ soft: true });
-      /** 僅單一 WPQ 玩法時預切子玩法，避免連贏塊再全量 ensureQinPoolTab */
-      if (needQin && !needQpl) {
-        await ensureWpqSubType("QIN", { soft: true });
-        if (payload?.bankerMode) {
-          await ensureQinBankerBetMode();
-        } else {
-          const { batches } = partitionQinBankerBatches(qinFinal);
-          const { extraSingles } = expandBankerBatchesForSync(batches);
-          if (extraSingles.length) await ensureWpqBoxBetMode();
-        }
-      } else if (needQpl && !needQin) {
-        await ensureWpqSubType("QPL", { soft: true });
-      }
+    } else if (qinFinal.length > 0 || qplFinal.length > 0) {
+      await ensureWpqPoolReady({ soft: false });
     }
 
     await ensureOnRacePage(targetUrl, raceNo, venueCode, {
       strictSamePage: payload.strictSamePage !== false,
     });
-
-    const r = Number(raceNo);
-    if (!isRaceDomReady(r)) {
-      await waitForRaceReady(r, isCrossAlupPage() ? 5000 : 4000);
-    }
-    return buildSyncPrepState(r);
   }
 
   /**
@@ -725,20 +664,8 @@
     await ensureWpqSubType("QPL", { soft: false });
   }
 
-  function isQinBankerBetModeActive() {
-    const ids = ["subTypeBT", "subTypeBanker", "subTypeBANKER", "subTypeFCTBanker"];
-    for (const id of ids) {
-      if (document.getElementById(id)?.checked) return true;
-    }
-    return Boolean(
-      document.querySelector(".radio-button-set-method-BT.radio-button-set-item-checked")
-    );
-  }
-
-  /** 連贏膽拖：部分場次需先切到「膽拖」投注方式（非複式）；返回 true 表示剛切換需短等 */
+  /** 連贏膽拖：部分場次需先切到「膽拖」投注方式（非複式） */
   async function ensureQinBankerBetMode() {
-    if (isQinBankerBetModeActive()) return false;
-
     const ids = ["subTypeBT", "subTypeBanker", "subTypeBANKER", "subTypeFCTBanker"];
     for (const id of ids) {
       const radio = document.getElementById(id);
@@ -748,6 +675,7 @@
         await sleep(120);
         return true;
       }
+      if (radio?.checked) return true;
     }
     const wrap = document.querySelector(".radio-button-set-method-BT, .radio-button-set-method-Banker");
     if (wrap && !wrap.classList.contains("radio-button-set-item-checked")) {
@@ -763,20 +691,8 @@
     return false;
   }
 
-  /** 複式模式（非膽拖）已激活 */
-  function isWpqBoxBetModeActive() {
-    const bankerIds = ["subTypeBT", "subTypeBanker", "subTypeBANKER", "subTypeFCTBanker"];
-    for (const id of bankerIds) {
-      if (document.getElementById(id)?.checked) return false;
-    }
-    if (document.querySelector(".radio-button-set-method-BT.radio-button-set-item-checked")) return false;
-    return true;
-  }
-
   /** Dutch 各組合金額不同時改複式同步：離開「膽拖」投注方式，在「腳」欄選兩匹 */
   async function ensureWpqBoxBetMode() {
-    if (isWpqBoxBetModeActive()) return false;
-
     const bankerIds = ["subTypeBT", "subTypeBanker", "subTypeBANKER", "subTypeFCTBanker"];
     let bankerOn = false;
     for (const id of bankerIds) {
@@ -1242,9 +1158,9 @@
 
   async function selectWpqBoxPair(raceNo, h1, h2, pool, opts = {}) {
     const r = Number(resolveWpqRaceNo(raceNo));
-    await uncheckAllQinTableSelections(raceNo, opts);
+    await uncheckAllQinTableSelections(raceNo);
     await uncheckAllWpqBankers(raceNo, pool);
-    await sleep(isCrossAlupPage() ? (opts.fast ? 40 : 55) : opts.fast ? 24 : 36);
+    await sleep(isCrossAlupPage() ? 55 : 36);
 
     if (!opts.skipQbCell && (await clickQbPairCell(pool, h1, h2))) {
       const qbOk = await waitWpqBoxFootPairSelected(r, h1, h2, pool, {
@@ -1259,9 +1175,9 @@
       return { ok: false, code: `MISSING_${pool}_CHECKBOX:${h1}-${h2}` };
     }
 
-    await setCheckboxChecked(cb1, true, syncCbDelay(opts, 18));
-    await sleep(opts.fast ? 16 : 24);
-    await setCheckboxChecked(cb2, true, syncCbDelay(opts, 18));
+    await setCheckboxChecked(cb1, true, 18);
+    await sleep(24);
+    await setCheckboxChecked(cb2, true, 18);
 
     const ok = await waitWpqBoxFootPairSelected(r, h1, h2, pool, { maxMs: opts.maxMs ?? 4200 });
     if (!ok) {
@@ -1290,8 +1206,7 @@
     return findQinLegFootCheckbox(raceNo, horse, pool);
   }
 
-  async function uncheckAllQinTableSelections(raceNo, opts = {}) {
-    const delay = opts.fast ? 4 : 18;
+  async function uncheckAllQinTableSelections(raceNo) {
     const r = Number(resolveWpqRaceNo(raceNo));
     const scopes = [
       document.querySelector("#rcOddsTable"),
@@ -1301,14 +1216,14 @@
       for (const cb of scope.querySelectorAll('input[type="checkbox"]:checked')) {
         const id = cb.id || "";
         if (id.includes("QIN") || id.includes("qpl") || id.includes("QPL")) {
-          await setCheckboxChecked(cb, false, delay);
+          await setCheckboxChecked(cb, false, 18);
         }
       }
     }
     for (const cb of document.querySelectorAll(
       `input[id^="wpleg_QIN_${r}_"]:checked, input[id^="wpleg_QPL_${r}_"]:checked, input[id^="wpbank"][id*="_QIN_${r}_"]:checked, input[id^="wpbank"][id*="_QPL_${r}_"]:checked`
     )) {
-      await setCheckboxChecked(cb, false, delay);
+      await setCheckboxChecked(cb, false, 18);
     }
   }
 
@@ -1851,14 +1766,13 @@
   }
 
   /** 位置Q/連贏：加入投注區並填十位金額（放寬注單行匹配，填寫後校驗一次） */
-  async function appendPairToSlipAndFill(matcher, stake, slipBefore, opts = {}) {
+  async function appendPairToSlipAndFill(matcher, stake, slipBefore) {
     const before = Number.isFinite(slipBefore) ? slipBefore : getBetLines().length;
     const want = normalizeStakeTen(stake);
-    const addPollMs = opts.fast ? 1600 : isCrossAlupPage() ? 2600 : 2000;
 
     let line = await pollUntil(() => findAddedBetLine(matcher, before), {
       interval: pollMs(),
-      maxMs: opts.fast ? 350 : 450,
+      maxMs: 450,
     });
 
     const slice = () => getBetLines().slice(before);
@@ -1870,7 +1784,7 @@
       await clickAddToSlip();
       line = await pollUntil(() => findAddedBetLine(matcher, before), {
         interval: pollMs(),
-        maxMs: addPollMs,
+        maxMs: isCrossAlupPage() ? 2600 : 2000,
       });
     }
 
@@ -1905,37 +1819,25 @@
       await ensureQinPoolTab({ soft: false });
     }
     if (!opts.raceSettled) await waitForRaceReady(r, 2500);
-    if (!opts.betModeReady) {
-      const switchedMode = await ensureQinBankerBetMode();
-      if (switchedMode) await sleep(isCrossAlupPage() ? 120 : 80);
-    }
+    await ensureQinBankerBetMode();
+    await sleep(isCrossAlupPage() ? 120 : 80);
 
     await uncheckWinExcept(raceNo, []);
-    await uncheckAllQinTableSelections(raceNo, opts);
+    await uncheckAllQinTableSelections(raceNo);
 
-    const cbDelay = syncCbDelay(opts);
     const bCb = findQinBankerCheckbox(r, banker, "QIN");
     if (!bCb) throw new Error(`MISSING_QIN_BANKER:${banker}`);
-    await setCheckboxChecked(bCb, true, opts.fast ? 0 : cbDelay);
-    for (let i = 0; i < legs.length; i++) {
-      const leg = legs[i];
+    await setCheckboxChecked(bCb, true, 14);
+    for (const leg of legs) {
       const lcb = findQinLegFootCheckbox(r, leg, "QIN");
       if (!lcb) throw new Error(`MISSING_QIN_LEG:${leg}`);
-      const legDelay = opts.fast && i < legs.length - 1 ? 0 : cbDelay;
-      await setCheckboxChecked(lcb, true, legDelay);
+      await setCheckboxChecked(lcb, true, 14);
     }
 
-    const waitOpts = {
-      pool: "QIN",
-      quick: Boolean(opts.poolReady || opts.fast),
-      maxMs: opts.fast ? 1600 : opts.poolReady ? 2000 : 3000,
-    };
+    const waitOpts = { pool: "QIN", quick: Boolean(opts.poolReady), maxMs: opts.poolReady ? 2000 : 3000 };
     if (!(await waitWpqBankerLegsSelected(r, banker, legs, waitOpts))) {
       throw new Error("HKJC_INSUFFICIENT_SELECTION:qin-banker");
     }
-
-    const slipPollMs = opts.fast ? 650 : 900;
-    const slipAddMs = opts.fast ? 2200 : isCrossAlupPage() ? 3200 : 2800;
 
     const slipBefore = getBetLines().length;
     let line = await pollUntil(
@@ -1943,7 +1845,7 @@
         const added = getBetLines().slice(slipBefore);
         return added.find(isQinBankerBetLine) || null;
       },
-      { interval: pollMs(), maxMs: slipPollMs }
+      { interval: pollMs(), maxMs: 900 }
     );
 
     if (!line) {
@@ -1956,7 +1858,7 @@
           if (added.length === 1 && isQinBetLine(added[0])) return added[0];
           return null;
         },
-        { interval: pollMs(), maxMs: slipAddMs }
+        { interval: pollMs(), maxMs: isCrossAlupPage() ? 3200 : 2800 }
       );
     }
 
@@ -1977,42 +1879,28 @@
   async function addQplBankerDrag(raceNo, batch, opts = {}) {
     const { banker, legs, items } = batch;
     const r = resolveWpqRaceNo(raceNo);
-    if (!opts.poolReady) {
-      await ensureWpqPoolReady({ soft: true });
-      await ensureWpqSubType("QPL", { soft: false });
-    } else if (!isWpqPoolReadyInUi() || !wpqSubTypeIs("QPL")) {
-      await ensureWpqPoolReady({ soft: false });
-      await ensureWpqSubType("QPL", { soft: false });
-    }
+    /** 必須先切「位置Q」再勾膽腳；在「連贏」下勾選會生成連贏注項 */
+    await ensureWpqPoolReady({ soft: false });
+    await ensureWpqSubType("QPL", { soft: false });
     if (!opts.raceSettled) await waitForRaceReady(r, 2500);
-    if (!opts.fast) await sleep(isCrossAlupPage() ? 150 : 100);
+    await sleep(isCrossAlupPage() ? 150 : 100);
 
     await uncheckWinExcept(raceNo, []);
-    await uncheckAllQinTableSelections(raceNo, opts);
+    await uncheckAllQinTableSelections(raceNo);
 
-    const cbDelay = syncCbDelay(opts);
     const bCb = findQinBankerCheckbox(r, banker, "QPL");
     if (!bCb) throw new Error(`MISSING_QIN_BANKER:${banker}`);
-    await setCheckboxChecked(bCb, true, opts.fast ? 0 : cbDelay);
-    for (let i = 0; i < legs.length; i++) {
-      const leg = legs[i];
+    await setCheckboxChecked(bCb, true, 14);
+    for (const leg of legs) {
       const lcb = findQinLegFootCheckbox(r, leg, "QPL");
       if (!lcb) throw new Error(`MISSING_QIN_LEG:${leg}`);
-      const legDelay = opts.fast && i < legs.length - 1 ? 0 : cbDelay;
-      await setCheckboxChecked(lcb, true, legDelay);
+      await setCheckboxChecked(lcb, true, 14);
     }
 
-    const waitOpts = {
-      pool: "QPL",
-      quick: Boolean(opts.poolReady || opts.fast),
-      maxMs: opts.fast ? 1600 : opts.poolReady ? 2000 : 3000,
-    };
+    const waitOpts = { pool: "QPL", quick: Boolean(opts.poolReady), maxMs: opts.poolReady ? 2000 : 3000 };
     if (!(await waitWpqBankerLegsSelected(r, banker, legs, waitOpts))) {
       throw new Error("HKJC_INSUFFICIENT_SELECTION:qpl-banker");
     }
-
-    const slipPollMs = opts.fast ? 650 : 900;
-    const slipAddMs = opts.fast ? 2200 : isCrossAlupPage() ? 3200 : 2800;
 
     const slipBefore = getBetLines().length;
     let line = await pollUntil(
@@ -2020,7 +1908,7 @@
         const added = getBetLines().slice(slipBefore);
         return added.find(isQplBankerBetLine) || null;
       },
-      { interval: pollMs(), maxMs: slipPollMs }
+      { interval: pollMs(), maxMs: 900 }
     );
 
     if (!line) {
@@ -2033,7 +1921,7 @@
           if (added.length === 1 && isQplBetLine(added[0])) return added[0];
           return null;
         },
-        { interval: pollMs(), maxMs: slipAddMs }
+        { interval: pollMs(), maxMs: isCrossAlupPage() ? 3200 : 2800 }
       );
     }
 
@@ -2115,10 +2003,7 @@
     if (!line) throw new Error("NO_BET_LINE");
     const want = normalizeStakeTen(stake);
     const stakeStr = String(want);
-    const input = await pollUntil(() => stakeInputFromLine(line), {
-      interval: pollMs(),
-      maxMs: activeSyncFast ? 800 : 1200,
-    });
+    const input = await pollUntil(() => stakeInputFromLine(line), { interval: pollMs(), maxMs: 1200 });
     if (!input) throw new Error("NO_STAKE_INPUT");
     if (readStakeFromLine(line) === want) return;
 
@@ -2145,14 +2030,14 @@
       }
       input.dispatchEvent(new Event("change", { bubbles: true }));
       input.dispatchEvent(new Event("blur", { bubbles: true }));
-      await sleep(activeSyncFast ? 16 : 28);
+      await sleep(28);
     };
 
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       if (readStakeFromLine(line) === want) return;
       if (attempt < 3) await pasteFill();
       else await typeStakeIntoInput(input, stakeStr);
-      await sleep(24 + attempt * 12);
+      await sleep(32 + attempt * 18);
       if (readStakeFromLine(line) === want) return;
     }
     await assertStakeOnLine(line, want);
@@ -2188,7 +2073,7 @@
     if (!line) line = findNewestBetLine(matcher);
     if (!line) throw new Error("NO_BET_LINE_MATCH");
 
-    await sleep(isCrossAlupPage() ? (activeSyncFast ? 40 : 70) : activeSyncFast ? 22 : 45);
+    await sleep(isCrossAlupPage() ? 70 : 45);
     await fillStakeOnLine(line, stake);
     await assertStakeOnLine(line, stake);
   }
@@ -2283,7 +2168,7 @@
       const cb = findWinCheckbox(raceNo, horse, venueCode);
       if (!cb) throw new Error(`MISSING_WIN_CHECKBOX:wpleg_WIN_${raceNo}_${horse}`);
       const slipBefore = getBetLines().length;
-      await setCheckboxChecked(cb, true, syncCbDelay(opts));
+      await setCheckboxChecked(cb, true, 14);
       if (!(await waitSelectionReady("win", raceNo))) {
         throw new Error("HKJC_INSUFFICIENT_SELECTION:win");
       }
@@ -2326,7 +2211,7 @@
       const cb = findPlaCheckbox(raceNo, horse, venueCode);
       if (!cb) throw new Error(`MISSING_PLA_CHECKBOX:wpleg_PLA_${raceNo}_${horse}`);
       const slipBefore = getBetLines().length;
-      await setCheckboxChecked(cb, true, syncCbDelay(opts));
+      await setCheckboxChecked(cb, true, 14);
       if (!(await waitSelectionReady("pla", raceNo))) {
         throw new Error("HKJC_INSUFFICIENT_SELECTION:pla");
       }
@@ -2694,7 +2579,7 @@
     }
     if (!opts.raceSettled) await waitForRaceReady(r, 2500);
 
-    if (opts.boxMode !== false && !opts.boxModeReady) {
+    if (opts.boxMode !== false) {
       await ensureWpqBoxBetMode();
     }
 
@@ -2702,21 +2587,19 @@
 
     const slipBefore = getBetLines().length;
     const matcher = qinPairLineMatcher(h1, h2);
-    const pairSelectMs = opts.fast ? 3200 : opts.poolReady ? 4200 : 5000;
 
     if (opts.boxMode !== false) {
       const sel = await selectWpqBoxPair(raceNo, h1, h2, "QIN", {
-        maxMs: pairSelectMs,
-        fast: opts.fast,
+        maxMs: opts.poolReady ? 4200 : 5000,
       });
       if (!sel.ok) throw new Error(sel.code || "HKJC_INSUFFICIENT_SELECTION:qin");
-      await appendPairToSlipAndFill(matcher, stake, slipBefore, opts);
-      await uncheckAllQinTableSelections(raceNo, opts);
+      await appendPairToSlipAndFill(matcher, stake, slipBefore);
+      await uncheckAllQinTableSelections(raceNo);
       await uncheckAllWpqBankers(raceNo, "QIN");
       return { added: 1 };
     }
 
-    await uncheckAllQinTableSelections(raceNo, opts);
+    await uncheckAllQinTableSelections(raceNo);
     await uncheckWpqExcept(r, [h1, h2], "QIN");
     await sleep(isCrossAlupPage() ? 50 : 32);
 
@@ -2740,8 +2623,8 @@
       throw new Error(`MISSING_QIN_CHECKBOX:${h1}-${h2}`);
     }
 
-    await setCheckboxChecked(cb1, true, syncCbDelay(opts));
-    await setCheckboxChecked(cb2, true, syncCbDelay(opts));
+    await setCheckboxChecked(cb1, true, 14);
+    await setCheckboxChecked(cb2, true, 14);
     await requireWpqPairSelected(r, h1, h2, "QIN", waitOpts);
 
     try {
@@ -2766,7 +2649,7 @@
     }
     if (!opts.raceSettled) await waitForRaceReady(r, 2500);
 
-    if (opts.boxMode !== false && !opts.boxModeReady) {
+    if (opts.boxMode !== false) {
       await ensureWpqBoxBetMode();
     }
 
@@ -2774,21 +2657,19 @@
 
     const slipBefore = getBetLines().length;
     const matcher = qplPairLineMatcher(h1, h2);
-    const pairSelectMs = opts.fast ? 3200 : opts.poolReady ? 4200 : 5000;
 
     if (opts.boxMode !== false) {
       const sel = await selectWpqBoxPair(raceNo, h1, h2, "QPL", {
-        maxMs: pairSelectMs,
-        fast: opts.fast,
+        maxMs: opts.poolReady ? 4200 : 5000,
       });
       if (!sel.ok) throw new Error(sel.code || "HKJC_INSUFFICIENT_SELECTION:qpl");
-      await appendPairToSlipAndFill(matcher, stake, slipBefore, opts);
-      await uncheckAllQinTableSelections(raceNo, opts);
+      await appendPairToSlipAndFill(matcher, stake, slipBefore);
+      await uncheckAllQinTableSelections(raceNo);
       await uncheckAllWpqBankers(raceNo, "QPL");
       return { added: 1 };
     }
 
-    await uncheckAllQinTableSelections(raceNo, opts);
+    await uncheckAllQinTableSelections(raceNo);
     await uncheckWpqExcept(r, [h1, h2], "QPL");
     await sleep(isCrossAlupPage() ? 50 : 32);
 
@@ -2812,8 +2693,8 @@
       throw new Error(`MISSING_QPL_CHECKBOX:${h1}-${h2}`);
     }
 
-    await setCheckboxChecked(cb1, true, syncCbDelay(opts));
-    await setCheckboxChecked(cb2, true, syncCbDelay(opts));
+    await setCheckboxChecked(cb1, true, 14);
+    await setCheckboxChecked(cb2, true, 14);
     await requireWpqPairSelected(r, h1, h2, "QPL", waitOpts);
 
     try {
@@ -2838,9 +2719,8 @@
     venueCode,
     targetUrl
   ) {
-    let syncPrep = buildSyncPrepState(raceNo);
     try {
-      syncPrep = await prepareHkjcUiForSync(
+      await prepareHkjcUiForSync(
         payload,
         winFinal,
         plaFinal,
@@ -2866,16 +2746,8 @@
     let added = 0;
     let skipped = 0;
     let updated = 0;
-    activeSyncFast = Boolean(
-      syncPrep.raceSettled &&
-        (syncPrep.qinSubTypeReady ||
-          syncPrep.qplSubTypeReady ||
-          syncPrep.wpqReady ||
-          syncPrep.winPoolReady)
-    );
-    const clickOpts = { alwaysAdd: true, fast: activeSyncFast };
+    const clickOpts = { alwaysAdd: true };
 
-    try {
     if (winFinal.length) {
       try {
         const wr = await addWinHorsesBatch(raceNo, winFinal, venueCode, clickOpts);
@@ -2926,27 +2798,18 @@
         updated += 1;
       }
       if (toAdd.length) {
-        if (!syncPrep.qinSubTypeReady) {
-          await ensureQinPoolTab({ soft: syncPrep.wpqReady });
-        }
+        /** 獨贏同步後常仍停在 #wp；連贏須切換至 #wpq，不可用 soft 跳過 */
+        await ensureQinPoolTab({ soft: false });
         const r = resolveWpqRaceNo(raceNo);
-        if (!syncPrep.raceSettled) {
-          await ensureRaceReadyIfNeeded(r, { maxMs: 2500 });
-        }
+        await waitForRaceReady(r, 2500);
         const { singles, batches } = partitionQinBankerBatches(toAdd);
         const { batches: syncBatches, extraSingles } = expandBankerBatchesForSync(batches);
-        const pairItems = [...singles, ...extraSingles];
-        let bankerBetModeReady = isQinBankerBetModeActive();
-        let boxBetModeReady = isWpqBoxBetModeActive();
         for (const batch of syncBatches) {
           try {
             const qr = await addQinBankerDrag(raceNo, batch, {
               poolReady: true,
               raceSettled: true,
-              fast: true,
-              betModeReady: bankerBetModeReady,
             });
-            bankerBetModeReady = true;
             added += qr?.added || 0;
           } catch (e) {
             for (const it of batch.items) {
@@ -2954,22 +2817,18 @@
             }
           }
         }
-        for (let pi = 0; pi < pairItems.length; pi++) {
-          const it = pairItems[pi];
+        for (const it of [...singles, ...extraSingles]) {
           try {
             const pairOpts = {
               poolReady: true,
               raceSettled: true,
-              fast: true,
-              boxModeReady: boxBetModeReady,
               /** Dutch 各組合不同額 → 複式「1+4」「1+5」，勿用膽+單腳（會彈「馬匹數目不足」） */
               boxMode: it._dutchBoxSync === true || Boolean(payload?.bankerNum),
             };
             const qr = await addQinPair(raceNo, it.combo, it.stakePerLine, pairOpts);
-            boxBetModeReady = true;
             if (qr?.skipped) skipped += 1;
             else added += qr?.added || 1;
-            if (pi < pairItems.length - 1) await sleep(isCrossAlupPage() ? 28 : 18);
+            await sleep(isCrossAlupPage() ? 90 : 60);
           } catch (e) {
             errors.push({ combo: it.combo, type: "連贏", error: String(e?.message || e) });
           }
@@ -2985,23 +2844,16 @@
         updated += 1;
       }
       if (toAdd.length) {
-        if (!syncPrep.qplSubTypeReady) {
-          await ensureQplPoolTab({ soft: syncPrep.wpqReady });
-        }
+        await ensureQplPoolTab({ soft: false });
         const r = resolveWpqRaceNo(raceNo);
-        if (!syncPrep.raceSettled) {
-          await ensureRaceReadyIfNeeded(r, { maxMs: 2500 });
-        }
+        await waitForRaceReady(r, 2500);
         const { singles, batches } = partitionQinBankerBatches(toAdd);
         const { batches: syncBatches, extraSingles } = expandBankerBatchesForSync(batches);
-        const qplPairItems = [...singles, ...extraSingles];
-        let qplBoxModeReady = isWpqBoxBetModeActive();
         for (const batch of syncBatches) {
           try {
             const qr = await addQplBankerDrag(raceNo, batch, {
               poolReady: true,
               raceSettled: true,
-              fast: true,
             });
             added += qr?.added || 0;
           } catch (e) {
@@ -3010,21 +2862,16 @@
             }
           }
         }
-        for (let pi = 0; pi < qplPairItems.length; pi++) {
-          const it = qplPairItems[pi];
+        for (const it of [...singles, ...extraSingles]) {
           try {
             const pairOpts = {
               poolReady: true,
               raceSettled: true,
-              fast: true,
-              boxModeReady: qplBoxModeReady,
               boxMode: it._dutchBoxSync === true || Boolean(payload?.bankerNum),
             };
             const qr = await addQplPair(raceNo, it.combo, it.stakePerLine, pairOpts);
-            qplBoxModeReady = true;
             if (qr?.skipped) skipped += 1;
             else added += qr?.added || 1;
-            if (pi < qplPairItems.length - 1) await sleep(isCrossAlupPage() ? 28 : 18);
           } catch (e) {
             errors.push({ combo: it.combo, type: "位置Q", error: String(e?.message || e) });
           }
@@ -3044,9 +2891,6 @@
       qplAdded: qplFinal.length - errors.filter((e) => e.type === "位置Q").length,
       errors: errors.length ? errors : undefined,
     };
-    } finally {
-      activeSyncFast = false;
-    }
   }
 
   async function applySlip(payload) {
