@@ -1,7 +1,7 @@
 /** 將 popup 的注單同步請求轉發至 bet.hkjc.com 分頁的 content script */
 const HKJC_ORIGIN = "https://bet.hkjc.com";
 /** 與 content-hkjc.js 的 SCRIPT_VERSION 保持一致；不符則強制重新注入 */
-const HKJC_CONTENT_SCRIPT_VERSION = 44;
+const HKJC_CONTENT_SCRIPT_VERSION = 50;
 const PANEL_PAGE = "popup.html";
 
 /** 類 MetaMask：點工具欄圖標打開 Chrome 右側邊欄，不遮擋馬會頁中央 */
@@ -73,6 +73,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await openHkjcTabIfMissing(targetUrl, { activateTab: Boolean(msg.payload?.activateTab) })
       );
     })().catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+    return true;
+  }
+  if (msg?.type === "VERIFY_HKJC_STAKE") {
+    void handleVerifyHkjcStake(msg.payload)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
     return true;
   }
   if (msg?.type !== "SYNC_TO_HKJC") return false;
@@ -288,6 +294,30 @@ async function openHkjcTabIfMissing(targetUrl, options = {}) {
   await waitForTabComplete(newTab.id);
   await waitForHkjcUrl(newTab.id, targetUrl);
   return { ok: true, opened: true, tabId: newTab.id, tabUrl: targetUrl };
+}
+
+async function handleVerifyHkjcStake(payload) {
+  const targetUrl = String(payload?.url || "").trim();
+  if (!targetUrl.startsWith(HKJC_ORIGIN)) {
+    return { ok: false, error: "INVALID_URL" };
+  }
+  const { tab } = await findHkjcTabForSync(targetUrl, false);
+  if (!tab?.id) {
+    return { ok: false, error: "NO_HKJC_TAB", expectedUrl: targetUrl };
+  }
+  const ready = await ensureHkjcContentScript(tab.id);
+  if (!ready) {
+    return { ok: false, error: "CONTENT_SCRIPT_UNAVAILABLE" };
+  }
+  try {
+    const result = await chrome.tabs.sendMessage(tab.id, {
+      type: "HKJC_VERIFY_STAKE",
+      payload,
+    });
+    return result ?? { ok: false, error: "EMPTY_RESPONSE" };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
 }
 
 async function handleSyncToHkjc(payload) {

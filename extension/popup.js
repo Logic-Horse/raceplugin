@@ -1189,7 +1189,9 @@
       bankerNum: bankerMode && bankerNum ? Number(bankerNum) : null,
       /** 半自動：模擬勾選 +「加入投注區」+ 填金額（與人手操作一致） */
       slipOnly: false,
-      syncMode: "semi-auto-click",
+      /** P4：優先 Direct Panel 注入（最快），失敗自動回退點擊路徑 */
+      preferDirectPanel: true,
+      syncMode: "direct-or-click",
       /** 不自動跳轉馬會頁，避免「離開此網站？」清空未發送注項 */
       strictSamePage: true,
       allowDirectFallback: false,
@@ -1238,6 +1240,8 @@
       PAGE_MISMATCH: "馬會頁面與目前場次不一致",
       HKJC_BETTING_LOCKED: "馬會選馬框已鎖定（該場可能未開盤或已截止），請稍後或換場再試",
       HKJC_STAKE_FILL_FAILED: "注項已加入馬會投注區，但金額未能寫入（仍為 $10）；請刷新馬會頁後重試同步",
+      HKJC_STAKE_TOTAL_MISMATCH:
+        "馬會投注區總金額與插件不一致（部分注項可能仍為 $10）；請勿發送注項，刷新馬會頁後重試同步",
     };
     if (c === "PAGE_MISMATCH" && res) return formatHkjcPageMismatchMessage(res);
     if (c === "NO_HKJC_TAB" && res?.expectedUrl) {
@@ -1306,6 +1310,76 @@
     }
     if (/^[A-Z][A-Z0-9_]+$/.test(c)) return "同步失敗，請刷新馬會頁後重試";
     return c || "同步失敗，請稍後重試";
+  }
+
+  /** P5：本次同步注項預期總投（十位，與馬會一致） */
+  function sumSyncedItemsStake(syncScope) {
+    return getSlipItemsForSyncScope(syncScope).reduce(
+      (s, it) => s + stakeForHkjc(Number(it.stakePerLine) || 0),
+      0
+    );
+  }
+
+  async function postSyncVerifyHkjcStake(payload, syncRes) {
+    const expectedDelta = sumSyncedItemsStake(payload.syncScope);
+    const slipTotalBefore = syncRes?.stakeVerify?.slipTotalBefore ?? null;
+    if (syncRes?.stakeVerify?.ok && syncRes.stakeVerify.expectedDelta === expectedDelta) {
+      return syncRes.stakeVerify;
+    }
+    if (!chrome?.runtime?.sendMessage || !payload?.url) {
+      return syncRes?.stakeVerify ?? { ok: false, expectedDelta, actualDelta: null };
+    }
+    try {
+      const vr = await chrome.runtime.sendMessage({
+        type: "VERIFY_HKJC_STAKE",
+        payload: {
+          url: payload.url,
+          expectedDelta,
+          slipTotalBefore,
+        },
+      });
+      if (vr && typeof vr.ok === "boolean") return vr;
+    } catch {
+      /* ignore */
+    }
+    return syncRes?.stakeVerify ?? buildStakeVerifyFallback(expectedDelta);
+  }
+
+  function buildStakeVerifyFallback(expectedDelta) {
+    return { ok: false, expectedDelta, actualDelta: null, grandTotal: null, slipTotalBefore: null };
+  }
+
+  /** P5：同步後確認閘門——總額一致才可發送 */
+  function showHkjcSendGate(verify, added, backendNote, syncScope) {
+    const note = backendNote ? String(backendNote).replace(/^[，。]+/, "").trim() : "";
+    const noteSuffix = note ? `（${note}）` : "";
+    if (verify?.ok) {
+      const grand =
+        verify.grandTotal != null
+          ? fmtMoney(verify.grandTotal)
+          : verify.actualDelta != null
+            ? fmtMoney(verify.actualDelta)
+            : "";
+      const grandPart = grand ? `馬會總投 ${grand} 已核對一致` : "金額已核對一致";
+      showActionFeedback(
+        `已寫入 ${added} 項 · ${grandPart}，可按馬會「發送注項」${noteSuffix}`,
+        "success",
+        { persist: true }
+      );
+      return;
+    }
+    const exp = fmtMoney(verify?.expectedDelta ?? sumSyncedItemsStake(syncScope));
+    const act =
+      verify?.actualDelta != null
+        ? fmtMoney(verify.actualDelta)
+        : verify?.grandTotal != null
+          ? fmtMoney(verify.grandTotal)
+          : "—";
+    showActionFeedback(
+      `已寫入 ${added} 項，但馬會總投增量 ${act} 與預期 ${exp} 不符 · 請勿發送注項，請刷新馬會頁後重試同步`,
+      "error",
+      { persist: true }
+    );
   }
 
   /** 與 buildHkjcSyncPayload 的 syncScope 一致：本次寫入馬會的注項 */
@@ -1591,6 +1665,7 @@
 
     const btn = $("#btn-sync-hkjc");
     const label = "同步到馬會";
+    hideActionFeedback();
     if (btn) {
       btn.disabled = true;
       btn.textContent = "同步中…";
@@ -1621,15 +1696,8 @@
         return;
       }
       const backendNote = await submitBackendAfterHkjcSync(res, payload.syncScope);
-      if (res.mode === "direct-slip-fallback") {
-        toast(
-          `已加入馬會投注區 ${n} 項，請在馬會網站核對注項與金額後按「發送注項」${backendNote}`
-        );
-        return;
-      }
-      toast(
-        `已加入馬會投注區 ${n} 項，請在馬會網站核對注項與金額後按「發送注項」${backendNote}`
-      );
+      const verify = await postSyncVerifyHkjcStake(payload, res);
+      showHkjcSendGate(verify, n, backendNote, payload.syncScope);
     } catch (e) {
       toast(`馬會同步失敗：${hkjcSyncErrorText(e?.message)}`);
     } finally {

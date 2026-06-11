@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "賽馬注單助手",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "高密度注單介面；點擊圖標在瀏覽器右側打開（不遮擋馬會主頁）",
   "permissions": ["storage", "tabs", "scripting", "sidePanel", "windows"],
   "host_permissions": ["http://18.162.150.191/*", "https://bet.hkjc.com/*"],
