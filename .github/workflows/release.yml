@@ -17,12 +17,14 @@ jobs:
       - name: Package extension
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          DATE="$(date +%Y%m%d)"
+          OUT="../dist/Logic_投注助手_v${VERSION}_${DATE}.zip"
           mkdir -p dist
           cd extension
-          zip -r "../dist/raceplugin-v${VERSION}.zip" . -x "*.DS_Store"
+          zip -r "$OUT" . -x "*.DS_Store"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/raceplugin-v*.zip
+          files: dist/Logic_投注助手_*.zip
           generate_release_notes: true

@@ -21,7 +21,7 @@
 
 ## 安装（Release 包）
 
-1. 打开 [Releases](https://github.com/Logic-Horse/raceplugin/releases) 页面，下载最新 `raceplugin-v*.zip`。
+1. 打开 [Releases](https://github.com/Logic-Horse/raceplugin/releases) 页面，下载最新 `Logic_投注助手_v*_*.zip`。
 2. 解压到任意文件夹。
 3. Chrome 地址栏输入 `chrome://extensions/`。
 4. 开启右上角 **开发者模式**。
@@ -47,7 +47,7 @@
 ./scripts/package.sh
 ```
 
-输出：`dist/raceplugin-v{版本}.zip`（zip 根目录即为扩展文件，可直接用于加载或发布）。
+输出：`dist/Logic_投注助手_v{版本}_{YYYYMMDD}.zip`（zip 根目录即为扩展文件，可直接用于加载或发布）。
 
 ## 发布 Release
 

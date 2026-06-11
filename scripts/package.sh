@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(grep -m1 '"version"' "$ROOT/extension/manifest.json" | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
-OUT="$ROOT/dist/raceplugin-v${VERSION}.zip"
+DATE="$(date +%Y%m%d)"
+OUT="$ROOT/dist/Logic_投注助手_v${VERSION}_${DATE}.zip"
 
 mkdir -p "$ROOT/dist"
 rm -f "$OUT"
