@@ -2,7 +2,7 @@
  * bet.hkjc.com：將插件注項同步至右側投注區（獨贏 / 位置 / 連贏 / 位置Q），不點擊「發送注項」。
  */
 (() => {
-  const SCRIPT_VERSION = 50;
+  const SCRIPT_VERSION = 54;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /** 條件滿足即返回，避免固定長 sleep */
@@ -254,6 +254,21 @@
     return waitForRaceReady(raceNo, opts.maxMs ?? 2500);
   }
 
+  /** 連贏/位置Q 賠率表 checkbox 已掛載（避免 P3 跳過等待後找不到勾選框） */
+  async function ensureWpqRaceTableReady(raceNo, opts = {}) {
+    const r = Number(resolveWpqRaceNo(raceNo));
+    if (!Number.isFinite(r) || r < 1) return false;
+    const ok = await pollUntil(
+      () =>
+        document.querySelector(`input[id^="wpleg_QIN_${r}_"]`) ||
+        document.querySelector(`input[id^="wpleg_QPL_${r}_"]`) ||
+        document.querySelector(`input[id^="wpbank"][id*="_QIN_${r}_"]`) ||
+        document.querySelector(`input[id^="wpbank"][id*="_QPL_${r}_"]`),
+      { interval: pollMs(), maxMs: opts.maxMs ?? 2200 }
+    );
+    return Boolean(ok);
+  }
+
   function buildSyncPrepState(raceNo) {
     return {
       raceSettled: isRaceDomReady(raceNo),
@@ -432,15 +447,20 @@
       await ensureWpqPoolReady({ soft: true });
       if (needQin && !needQpl) {
         await ensureWpqSubType("QIN", { soft: true });
-        const { batches } = partitionQinBankerBatches(qinFinal);
+        const { singles, batches } = partitionQinBankerBatches(qinFinal);
         const { extraSingles } = expandBankerBatchesForSync(batches);
-        if (extraSingles.length) {
+        if (singles.length || extraSingles.length) {
           await ensureWpqBoxBetMode();
         } else if (batches.length) {
           await ensureQinBankerBetMode();
         }
       } else if (needQpl && !needQin) {
         await ensureWpqSubType("QPL", { soft: true });
+        const { singles, batches } = partitionQinBankerBatches(qplFinal);
+        const { extraSingles } = expandBankerBatchesForSync(batches);
+        if (singles.length || extraSingles.length) {
+          await ensureWpqBoxBetMode();
+        }
       }
     }
 
@@ -892,6 +912,51 @@
     );
   }
 
+  /** Dutch 膽拖各組合金額不同 → 拆成多行複式同步 */
+  function hasDutchBankerBoxExpansion(items) {
+    const { batches } = partitionQinBankerBatches(Array.isArray(items) ? items : []);
+    return batches.some((batch) => !bankerBatchStakesEqual(batch.items));
+  }
+
+  /** Dutch 可拆賬（膽拖+複式）時跳過底部總投核對：插件逐行累加與馬會一行多注/複式行小計可能不一致 */
+  function shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal) {
+    if (payload?.skipGrandTotalVerify === true) return true;
+    if (payload?.dutchStakeMode !== true) return false;
+    if (hasDutchBankerBoxExpansion(qinFinal) || hasDutchBankerBoxExpansion(qplFinal)) {
+      return true;
+    }
+    if (payload?.bankerMode && (qinFinal.length > 0 || qplFinal.length > 0)) return true;
+    return false;
+  }
+
+  function buildSkippedGrandTotalVerify(expectedDelta, slipTotalBefore) {
+    const want = normalizeStakeTen(expectedDelta);
+    return {
+      ok: true,
+      skippedGrandTotal: true,
+      expectedDelta: want,
+      actualDelta: null,
+      grandTotal: readBetSlipGrandTotal(),
+      slipTotalBefore:
+        slipTotalBefore != null && Number.isFinite(Number(slipTotalBefore))
+          ? normalizeStakeTen(slipTotalBefore)
+          : null,
+    };
+  }
+
+  function buildStakeVerifyForSync(payload, syncedItems, slipTotalBefore, qinFinal, qplFinal) {
+    const expectedDelta = sumItemsStake(syncedItems);
+    if (shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal)) {
+      return buildSkippedGrandTotalVerify(expectedDelta, slipTotalBefore);
+    }
+    return buildStakeVerifySnapshot(expectedDelta, slipTotalBefore);
+  }
+
+  async function verifySyncStakeTotalsIfNeeded(payload, slipTotalBefore, items, qinFinal, qplFinal) {
+    if (shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal)) return;
+    await verifySyncStakeTotals(slipTotalBefore, items);
+  }
+
   function horseFromWinCheckboxId(id) {
     const m = /wpleg_(?:[A-Z0-9]+_)?WIN_\d+_(\d+)/i.exec(String(id || ""));
     return m ? String(Number(m[1])) : "";
@@ -1116,7 +1181,14 @@
         runnerTd.closest("tr.rc-odds-row-m") ||
         runnerTd.closest("tr[class*='odds-row']") ||
         runnerTd.closest("tr");
-      if (row?.querySelector('input[type="checkbox"], .checkbox-container')) return row;
+      if (row?.querySelector('input[type="checkbox"], .checkbox-container')) {
+        try {
+          row.scrollIntoView({ block: "nearest", inline: "nearest" });
+        } catch {
+          /* ignore */
+        }
+        return row;
+      }
     }
     const compact =
       document.querySelector(`#rc-odds-table-compact-${r}`) ||
@@ -1234,12 +1306,19 @@
   }
 
   function findQinLegFootCheckbox(raceNo, horse, pool) {
+    const row = findRunnerRowByHorse(horse, raceNo);
+    if (row) {
+      try {
+        row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch {
+        /* ignore */
+      }
+    }
     for (const id of qinLegFootCheckboxIdCandidates(raceNo, horse, pool)) {
       const el = document.getElementById(id);
-      if (el && isInteractiveCheckbox(el) && !/^wpbank/i.test(el.id || "")) return el;
+      if (el && !/^wpbank/i.test(el.id || "") && !isCheckboxBettingLocked(el)) return el;
     }
     const headers = getWpqBankerLegHeaders();
-    const row = findRunnerRowByHorse(horse, raceNo);
     if (headers && row) {
       const cb = findCheckboxNearColumn(row, headers.legHdr);
       if (cb && !/^wpbank/i.test(cb.id || "")) return cb;
@@ -1250,9 +1329,21 @@
         (inp) => /^wpleg_(QIN|QPL|QQP)_/i.test(inp.id || "") && !/^wpbank/i.test(inp.id || "")
       );
       if (leg) return leg;
+      const plain = cbs.find((inp) => !/^wpbank/i.test(inp.id || ""));
+      if (plain) return plain;
       if (cbs.length >= 2 && !/^wpbank/i.test(cbs[1].id || "")) return cbs[1];
     }
     return findQinLegCheckboxLegacy(raceNo, horse, pool);
+  }
+
+  /** 連贏複式同步前：左側 WPQ、子類型連贏、投注方式複式、賠率表就緒 */
+  async function prepareQinBoxPairSync(raceNo, opts = {}) {
+    await ensureQinPoolTab({ soft: false });
+    const switched = await ensureWpqBoxBetMode();
+    if (switched) await sleep(isCrossAlupPage() ? 160 : 120);
+    const r = Number(resolveWpqRaceNo(raceNo));
+    await ensureWpqRaceTableReady(r, { maxMs: opts.maxMs ?? 2800 });
+    await sleep(isCrossAlupPage() ? 40 : 28);
   }
 
   async function uncheckAllWpqBankers(raceNo, pool) {
@@ -1293,11 +1384,21 @@
     return Boolean(ok);
   }
 
-  async function selectWpqBoxPair(raceNo, h1, h2, pool, opts = {}) {
-    const r = Number(resolveWpqRaceNo(raceNo));
+  /** 複式勾選前清表：批量同步第 2 項起僅清非本組合腳位，避免撤銷已加入投注區的注單 */
+  async function clearWpqPairSelection(raceNo, h1, h2, pool, opts = {}) {
+    if (opts.skipInitialClear) {
+      await uncheckWpqExcept(resolveWpqRaceNo(raceNo), [h1, h2], pool);
+      await sleep(isCrossAlupPage() ? 40 : 24);
+      return;
+    }
     await uncheckQinTableForRace(raceNo, pool, opts);
     await uncheckAllWpqBankers(raceNo, pool);
     await sleep(isCrossAlupPage() ? 55 : 36);
+  }
+
+  async function selectWpqBoxPairOnce(raceNo, h1, h2, pool, opts = {}) {
+    const r = Number(resolveWpqRaceNo(raceNo));
+    await clearWpqPairSelection(raceNo, h1, h2, pool, opts);
 
     if (!opts.skipQbCell && (await clickQbPairCell(pool, h1, h2))) {
       const qbOk = await waitWpqBoxFootPairSelected(r, h1, h2, pool, {
@@ -1308,7 +1409,7 @@
 
     const cb1 = findQinLegFootCheckbox(r, h1, pool);
     const cb2 = findQinLegFootCheckbox(r, h2, pool);
-    if (!cb1 || !cb2 || !isCheckboxVisible(cb1) || !isCheckboxVisible(cb2)) {
+    if (!cb1 || !cb2 || isCheckboxBettingLocked(cb1) || isCheckboxBettingLocked(cb2)) {
       return { ok: false, code: `MISSING_${pool}_CHECKBOX:${h1}-${h2}` };
     }
 
@@ -1321,6 +1422,17 @@
       return { ok: false, code: `HKJC_INSUFFICIENT_SELECTION:${pool === "QPL" ? "qpl" : "qin"}` };
     }
     return { ok: true };
+  }
+
+  async function selectWpqBoxPair(raceNo, h1, h2, pool, opts = {}) {
+    let sel = await selectWpqBoxPairOnce(raceNo, h1, h2, pool, opts);
+    if (sel.ok) return sel;
+    await prepareQinBoxPairSync(raceNo, { maxMs: 2400 });
+    sel = await selectWpqBoxPairOnce(raceNo, h1, h2, pool, {
+      ...opts,
+      maxMs: Math.max(opts.maxMs ?? 4200, 4800),
+    });
+    return sel;
   }
 
   function findQinLegCheckboxLegacy(raceNo, horse, pool) {
@@ -1995,7 +2107,16 @@
       const el = document.getElementById(id);
       if (el) return el;
     }
-    return null;
+    const a = Number(h1);
+    const b = Number(h2);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const tag = String(pool || "QIN").toUpperCase() === "QPL" ? "QPL" : "QIN";
+    return (
+      document.querySelector(`[id^="qb_${tag}_${lo}_${hi}"]`) ||
+      document.querySelector(`[id^="qb_${tag}_${hi}_${lo}"]`) ||
+      document.querySelector(`[id*="qb_${tag}_${lo}_${hi}"]`)
+    );
   }
 
   async function clickQbPairCell(pool, h1, h2) {
@@ -2871,18 +2992,20 @@
 
     if (errors.length === 0 && added > 0) {
       try {
-        await verifySyncStakeTotals(slipTotalBefore, [
-          ...winFinal,
-          ...plaFinal,
-          ...qinFinal,
-          ...qplFinal,
-        ]);
+        await verifySyncStakeTotalsIfNeeded(
+          payload,
+          slipTotalBefore,
+          [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal],
+          qinFinal,
+          qplFinal
+        );
       } catch (e) {
         errors.push({ combo: "", type: "", error: String(e?.code || e?.message || e) });
       }
     }
 
     const syncedItems = [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal];
+    const skipGrandTotalVerify = shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal);
     return {
       ok: errors.length === 0,
       added,
@@ -2890,10 +3013,17 @@
       updated: 0,
       mode: "direct-slip-two-phase",
       appendOnly: true,
+      skipGrandTotalVerify,
       winAdded: winFinal.length - errors.filter((e) => e.type === "獨贏").length,
       qinAdded: qinFinal.length - errors.filter((e) => e.type === "連贏").length,
       qplAdded: qplFinal.length - errors.filter((e) => e.type === "位置Q").length,
-      stakeVerify: buildStakeVerifySnapshot(sumItemsStake(syncedItems), slipTotalBefore),
+      stakeVerify: buildStakeVerifyForSync(
+        payload,
+        syncedItems,
+        slipTotalBefore,
+        qinFinal,
+        qplFinal
+      ),
       errors: errors.length ? errors : undefined,
     };
   }
@@ -2972,6 +3102,7 @@
     if (!pair) throw new Error(`INVALID_QIN_COMBO:${combo}`);
     const [h1, h2] = pair;
     const r = resolveWpqRaceNo(raceNo);
+    const useBox = opts.boxMode !== false;
 
     if (!opts.poolReady) {
       await ensureQinPoolTab({ soft: true });
@@ -2980,8 +3111,14 @@
     }
     if (!opts.raceSettled) await ensureRaceReadyIfNeeded(r, { maxMs: 2500 });
 
-    if (opts.boxMode !== false) {
-      await ensureWpqBoxBetMode();
+    if (useBox) {
+      if (!opts.skipBoxPrep) {
+        await prepareQinBoxPairSync(raceNo, { maxMs: opts.poolReady ? 2800 : 3200 });
+      } else {
+        await ensureWpqBoxBetMode();
+        await ensureWpqRaceTableReady(r, { maxMs: 1800 });
+        await sleep(isCrossAlupPage() ? 36 : 24);
+      }
     }
 
     await uncheckWinExcept(raceNo, []);
@@ -2989,21 +3126,22 @@
     const slipBefore = getBetLines().length;
     const matcher = qinPairLineMatcher(h1, h2);
 
-    if (opts.boxMode !== false) {
+    if (useBox) {
       const sel = await selectWpqBoxPair(raceNo, h1, h2, "QIN", {
-        maxMs: opts.poolReady ? 4200 : 5000,
+        maxMs: opts.poolReady ? 4800 : 5600,
         poolReady: opts.poolReady,
+        skipInitialClear: opts.skipInitialClear,
       });
       if (!sel.ok) throw new Error(sel.code || "HKJC_INSUFFICIENT_SELECTION:qin");
       const boxR = await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill);
-      await uncheckQinTableForRace(raceNo, "QIN", opts);
-      await uncheckAllWpqBankers(raceNo, "QIN");
+      if (!opts.deferFill) {
+        await uncheckQinTableForRace(raceNo, "QIN", opts);
+        await uncheckAllWpqBankers(raceNo, "QIN");
+      }
       return pairSlipResult(boxR);
     }
 
-    await uncheckQinTableForRace(raceNo, "QIN", opts);
-    await uncheckWpqExcept(r, [h1, h2], "QIN");
-    await sleep(isCrossAlupPage() ? 50 : 32);
+    await clearWpqPairSelection(raceNo, h1, h2, "QIN", opts);
 
     const waitOpts = { quick: Boolean(opts.poolReady), maxMs: opts.poolReady ? 1800 : 2600 };
     let lastErr = null;
@@ -3069,14 +3207,14 @@
       });
       if (!sel.ok) throw new Error(sel.code || "HKJC_INSUFFICIENT_SELECTION:qpl");
       const boxR = await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill);
-      await uncheckQinTableForRace(raceNo, "QPL", opts);
-      await uncheckAllWpqBankers(raceNo, "QPL");
+      if (!opts.deferFill) {
+        await uncheckQinTableForRace(raceNo, "QPL", opts);
+        await uncheckAllWpqBankers(raceNo, "QPL");
+      }
       return pairSlipResult(boxR);
     }
 
-    await uncheckQinTableForRace(raceNo, "QPL", opts);
-    await uncheckWpqExcept(r, [h1, h2], "QPL");
-    await sleep(isCrossAlupPage() ? 50 : 32);
+    await clearWpqPairSelection(raceNo, h1, h2, "QPL", opts);
 
     const waitOpts = { quick: Boolean(opts.poolReady), maxMs: opts.poolReady ? 1800 : 2600 };
     let lastErr = null;
@@ -3216,8 +3354,10 @@
         if (!syncPrep.raceSettled) {
           await ensureRaceReadyIfNeeded(r, { maxMs: 2500 });
         }
+        await ensureWpqRaceTableReady(r, { maxMs: syncPrep.raceSettled ? 1800 : 3000 });
         const { singles, batches } = partitionQinBankerBatches(toAdd);
         const { batches: syncBatches, extraSingles } = expandBankerBatchesForSync(batches);
+        const qinSinglesList = [...singles, ...extraSingles];
         const qinSlipAnchor = getBetLines().length;
         const qinFillQueue = [];
         let bankerBetModeReady = syncPrep.qinBankerModeReady;
@@ -3227,6 +3367,9 @@
           raceSettled: true,
           betModeReady: bankerBetModeReady,
         };
+        if (qinSinglesList.length) {
+          await prepareQinBoxPairSync(raceNo, { maxMs: 3000 });
+        }
         for (const batch of syncBatches) {
           try {
             const qr = await addQinBankerDrag(raceNo, batch, {
@@ -3242,12 +3385,18 @@
             }
           }
         }
-        for (const it of [...singles, ...extraSingles]) {
+        if (syncBatches.length && qinSinglesList.length) {
+          await prepareQinBoxPairSync(raceNo, { maxMs: 2400 });
+        }
+        for (let qi = 0; qi < qinSinglesList.length; qi++) {
+          const it = qinSinglesList[qi];
           try {
             const pairOpts = {
               ...deferFill,
-              /** Dutch 各組合不同額 → 複式「1+4」「1+5」，勿用膽+單腳（會彈「馬匹數目不足」） */
-              boxMode: it._dutchBoxSync === true || Boolean(payload?.bankerNum),
+              /** 連贏「2-4」格式一律走複式腳欄勾選 */
+              boxMode: true,
+              skipInitialClear: qi > 0,
+              skipBoxPrep: true,
             };
             const qr = await addQinPair(raceNo, it.combo, it.stakePerLine, pairOpts);
             if (qr?.skipped) skipped += 1;
@@ -3265,6 +3414,10 @@
           } catch (e) {
             errors.push({ combo: "", type: "連贏", error: String(e?.code || e?.message || e) });
           }
+        }
+        if (qinSinglesList.length || syncBatches.length) {
+          await uncheckQinTableForRace(raceNo, "QIN", { quick: true });
+          await uncheckAllWpqBankers(raceNo, "QIN");
         }
       }
     }
@@ -3286,11 +3439,17 @@
         if (!syncPrep.raceSettled) {
           await ensureRaceReadyIfNeeded(r, { maxMs: 2500 });
         }
+        await ensureWpqRaceTableReady(r, { maxMs: syncPrep.raceSettled ? 1800 : 3000 });
         const { singles, batches } = partitionQinBankerBatches(toAdd);
         const { batches: syncBatches, extraSingles } = expandBankerBatchesForSync(batches);
+        const qplSinglesList = [...singles, ...extraSingles];
         const qplSlipAnchor = getBetLines().length;
         const qplFillQueue = [];
         const deferFill = { deferFill: true, poolReady: true, raceSettled: true };
+        if (qplSinglesList.length) {
+          const switchedBox = await ensureWpqBoxBetMode();
+          if (switchedBox) await sleep(100);
+        }
         for (const batch of syncBatches) {
           try {
             const qr = await addQplBankerDrag(raceNo, batch, deferFill);
@@ -3302,11 +3461,17 @@
             }
           }
         }
-        for (const it of [...singles, ...extraSingles]) {
+        if (syncBatches.length && qplSinglesList.length) {
+          const switchedBox = await ensureWpqBoxBetMode();
+          if (switchedBox) await sleep(120);
+        }
+        for (let qi = 0; qi < qplSinglesList.length; qi++) {
+          const it = qplSinglesList[qi];
           try {
             const pairOpts = {
               ...deferFill,
-              boxMode: it._dutchBoxSync === true || Boolean(payload?.bankerNum),
+              boxMode: true,
+              skipInitialClear: qi > 0,
             };
             const qr = await addQplPair(raceNo, it.combo, it.stakePerLine, pairOpts);
             if (qr?.skipped) skipped += 1;
@@ -3325,17 +3490,22 @@
             errors.push({ combo: "", type: "位置Q", error: String(e?.code || e?.message || e) });
           }
         }
+        if (qplSinglesList.length || syncBatches.length) {
+          await uncheckQinTableForRace(raceNo, "QPL", { quick: true });
+          await uncheckAllWpqBankers(raceNo, "QPL");
+        }
       }
     }
 
     if (errors.length === 0 && added > 0) {
       try {
-        await verifySyncStakeTotals(slipTotalBefore, [
-          ...winFinal,
-          ...plaFinal,
-          ...qinFinal,
-          ...qplFinal,
-        ]);
+        await verifySyncStakeTotalsIfNeeded(
+          payload,
+          slipTotalBefore,
+          [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal],
+          qinFinal,
+          qplFinal
+        );
       } catch (e) {
         errors.push({
           combo: "",
@@ -3346,6 +3516,7 @@
     }
 
     const syncedItems = [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal];
+    const skipGrandTotalVerify = shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal);
     return {
       ok: errors.length === 0,
       added,
@@ -3353,10 +3524,17 @@
       updated,
       mode: "semi-auto-click-two-phase",
       appendOnly: true,
+      skipGrandTotalVerify,
       winAdded: winFinal.length - errors.filter((e) => e.type === "獨贏").length,
       qinAdded: qinFinal.length - errors.filter((e) => e.type === "連贏").length,
       qplAdded: qplFinal.length - errors.filter((e) => e.type === "位置Q").length,
-      stakeVerify: buildStakeVerifySnapshot(sumItemsStake(syncedItems), slipTotalBefore),
+      stakeVerify: buildStakeVerifyForSync(
+        payload,
+        syncedItems,
+        slipTotalBefore,
+        qinFinal,
+        qplFinal
+      ),
       errors: errors.length ? errors : undefined,
     };
   }
@@ -3424,7 +3602,8 @@
       return applySlipDirectPanel(payload, winFinal, plaFinal, qinFinal, qplFinal, raceNo, venueCode);
     }
 
-    const directEligible = canUseDirectPanelSync(payload, raceNo, targetUrl);
+    const directEligible =
+      canUseDirectPanelSync(payload, raceNo, targetUrl) && !qinFinal.length && !qplFinal.length;
     if (directEligible) {
       try {
         const direct = await applySlipDirectPanel(
@@ -3438,6 +3617,10 @@
         );
         if (direct.ok && direct.added > 0) {
           direct.mode = "direct-slip-primary";
+          return direct;
+        }
+        if ((direct.added || 0) > 0) {
+          direct.mode = "direct-slip-primary-partial";
           return direct;
         }
         removeRacepluginInjectedLines();

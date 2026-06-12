@@ -1187,6 +1187,8 @@
       /** 連贏/位置Q 膽拖：供 content 用「膽+腳」欄勾選 */
       bankerMode: Boolean(bankerMode && (activeCategory === "qin" || activeCategory === "qpl")),
       bankerNum: bankerMode && bankerNum ? Number(bankerNum) : null,
+      /** Dutch 拆賬：content 對膽拖+複式跳過底部總投核對 */
+      dutchStakeMode: dutchStakeAppliesOnScreen(),
       /** 半自動：模擬勾選 +「加入投注區」+ 填金額（與人手操作一致） */
       slipOnly: false,
       /** P4：優先 Direct Panel 注入（最快），失敗自動回退點擊路徑 */
@@ -1241,7 +1243,7 @@
       HKJC_BETTING_LOCKED: "馬會選馬框已鎖定（該場可能未開盤或已截止），請稍後或換場再試",
       HKJC_STAKE_FILL_FAILED: "注項已加入馬會投注區，但金額未能寫入（仍為 $10）；請刷新馬會頁後重試同步",
       HKJC_STAKE_TOTAL_MISMATCH:
-        "馬會投注區總金額與插件不一致（部分注項可能仍為 $10）；請勿發送注項，刷新馬會頁後重試同步",
+        "馬會投注區總金額與插件不一致；請勿發送注項，刷新馬會頁後重試同步",
     };
     if (c === "PAGE_MISMATCH" && res) return formatHkjcPageMismatchMessage(res);
     if (c === "NO_HKJC_TAB" && res?.expectedUrl) {
@@ -1321,6 +1323,16 @@
   }
 
   async function postSyncVerifyHkjcStake(payload, syncRes) {
+    if (syncRes?.skipGrandTotalVerify || syncRes?.stakeVerify?.skippedGrandTotal) {
+      return (
+        syncRes.stakeVerify ?? {
+          ok: true,
+          skippedGrandTotal: true,
+          expectedDelta: sumSyncedItemsStake(payload.syncScope),
+          actualDelta: null,
+        }
+      );
+    }
     const expectedDelta = sumSyncedItemsStake(payload.syncScope);
     const slipTotalBefore = syncRes?.stakeVerify?.slipTotalBefore ?? null;
     if (syncRes?.stakeVerify?.ok && syncRes.stakeVerify.expectedDelta === expectedDelta) {
@@ -1353,6 +1365,14 @@
   function showHkjcSendGate(verify, added, backendNote, syncScope) {
     const note = backendNote ? String(backendNote).replace(/^[，。]+/, "").trim() : "";
     const noteSuffix = note ? `（${note}）` : "";
+    if (verify?.ok && verify?.skippedGrandTotal) {
+      showActionFeedback(
+        `已寫入 ${added} 項 · Dutch 拆賬模式，請逐行核對金額後再按馬會「發送注項」${noteSuffix}`,
+        "success",
+        { persist: true }
+      );
+      return;
+    }
     if (verify?.ok) {
       const grand =
         verify.grandTotal != null
@@ -1672,21 +1692,28 @@
     }
     try {
       const res = await chrome.runtime.sendMessage({ type: "SYNC_TO_HKJC", payload });
+      const addedN = Number(res?.added) || 0;
+      const errList = Array.isArray(res?.errors) ? res.errors : [];
       if (!res?.ok) {
         if (res?.error === "PAGE_MISMATCH" || res?.error === "NO_HKJC_TAB") {
           toast(hkjcSyncErrorText(res.error, res));
           return;
         }
-        const firstErr = res?.errors?.[0]?.error || res?.error;
-        const extra =
-          Array.isArray(res?.errors) && res.errors.length > 1
-            ? `（另有 ${res.errors.length - 1} 項失敗）`
-            : "";
-        toast(`馬會同步失敗：${hkjcSyncErrorText(firstErr, res)}${extra}`);
-        return;
+        if (addedN <= 0) {
+          const firstErr = errList[0]?.error || res?.error;
+          const extra = errList.length > 1 ? `（另有 ${errList.length - 1} 項失敗）` : "";
+          toast(`馬會同步失敗：${hkjcSyncErrorText(firstErr, res)}${extra}`);
+          return;
+        }
+        const failN = errList.length;
+        showActionFeedback(
+          `已寫入 ${addedN} 項，另有 ${failN} 項未成功 · 請核對馬會投注區後再試未寫入項`,
+          "warn",
+          { persist: true }
+        );
       }
-      const n = Number(res.added) || 0;
-      const errN = Array.isArray(res.errors) ? res.errors.length : 0;
+      const n = addedN;
+      const errN = errList.length;
       if (n === 0 && syncCount > 0) {
         toast(
           errN > 0

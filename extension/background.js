@@ -1,7 +1,7 @@
 /** 將 popup 的注單同步請求轉發至 bet.hkjc.com 分頁的 content script */
 const HKJC_ORIGIN = "https://bet.hkjc.com";
 /** 與 content-hkjc.js 的 SCRIPT_VERSION 保持一致；不符則強制重新注入 */
-const HKJC_CONTENT_SCRIPT_VERSION = 50;
+const HKJC_CONTENT_SCRIPT_VERSION = 54;
 const PANEL_PAGE = "popup.html";
 
 /** 類 MetaMask：點工具欄圖標打開 Chrome 右側邊欄，不遮擋馬會頁中央 */
