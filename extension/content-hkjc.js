@@ -2,8 +2,61 @@
  * bet.hkjc.com：將插件注項同步至右側投注區（獨贏 / 位置 / 連贏 / 位置Q），不點擊「發送注項」。
  */
 (() => {
-  const SCRIPT_VERSION = 54;
+  const SCRIPT_VERSION = 72;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** syncDebug 默认开启；payload.syncDebug===false 或 __racepluginSyncDebug.disable() 可关 */
+  let syncDebugOn = false;
+  const syncTraceLog = [];
+
+  function setSyncDebug(enabled) {
+    syncDebugOn = Boolean(enabled);
+    if (!syncDebugOn) syncTraceLog.length = 0;
+  }
+
+  function elSyncId(el) {
+    if (!el) return "?";
+    if (el.id) return `#${el.id}`;
+    const cls = String(el.className || "")
+      .split(/\s+/)
+      .filter(Boolean)[0];
+    return cls ? `.${cls}` : String(el.tagName || "").toLowerCase();
+  }
+
+  function syncDebug(msg, extra) {
+    if (!syncDebugOn) return;
+    const line =
+      extra === undefined
+        ? String(msg)
+        : `${msg} ${typeof extra === "object" ? JSON.stringify(extra) : extra}`;
+    syncTraceLog.push({ t: Date.now(), msg: line });
+    console.log("[raceplugin-sync]", line);
+  }
+
+  function syncDebugErr(msg, err) {
+    if (!syncDebugOn) return;
+    const detail = err?.code || err?.message || String(err ?? "");
+    syncDebug(`✗ ${msg}`, detail);
+  }
+
+  globalThis.__racepluginSyncDebug = {
+    enable() {
+      setSyncDebug(true);
+      console.log("[raceplugin-sync] 调试已开启（下次同步会逐步输出）");
+    },
+    disable() {
+      setSyncDebug(false);
+      console.log("[raceplugin-sync] 调试已关闭");
+    },
+    get trace() {
+      return syncTraceLog.map((x) => x.msg);
+    },
+  };
+
+  function withSyncTrace(result) {
+    if (!syncDebugOn || !result || typeof result !== "object") return result;
+    return { ...result, syncTrace: syncTraceLog.map((x) => x.msg) };
+  }
 
   /** 條件滿足即返回，避免固定長 sleep */
   async function pollUntil(testFn, opts = {}) {
@@ -137,16 +190,26 @@
     if (!v) return false;
     if (isVenueTabActive(v)) return true;
 
+    syncDebug(`切换马场 #venue_${v}`);
     const venueEl = document.getElementById(`venue_${v}`);
-    if (venueEl && venueEl.offsetParent !== null) {
+    if (venueEl) {
+      try {
+        venueEl.scrollIntoView({ block: "nearest", inline: "center" });
+      } catch {
+        /* ignore */
+      }
       firePointerClick(venueEl);
       firePointerClick(venueEl.querySelector("h3, span"));
-      await pollUntil(() => isVenueTabActive(v), { interval: pollMs(), maxMs: 2800 });
+      await pollUntil(() => isVenueTabActive(v), { interval: pollMs(), maxMs: 3500 });
       if (isVenueTabActive(v)) {
         await pollUntil(
-          () => document.querySelector('input[id^="wpleg_"]') || document.querySelector("#rcOddsTable"),
-          { interval: pollMs(), maxMs: isCrossAlupPage() ? 1200 : 800 }
+          () =>
+            document.querySelector(`#raceno_1`) ||
+            document.querySelector('input[id^="wpleg_"]') ||
+            document.querySelector("#rcOddsTable"),
+          { interval: pollMs(), maxMs: isCrossAlupPage() ? 1800 : 1200 }
         );
+        await sleep(isCrossAlupPage() ? 120 : 80);
         return true;
       }
     }
@@ -160,7 +223,7 @@
       if (!labels.includes(t) && !labels.includes(t.toUpperCase())) continue;
       if (el.offsetParent === null) continue;
       firePointerClick(el);
-      await pollUntil(() => isVenueTabActive(v), { interval: pollMs(), maxMs: 2000 });
+      await pollUntil(() => isVenueTabActive(v), { interval: pollMs(), maxMs: 2500 });
       if (isVenueTabActive(v)) return true;
     }
     return false;
@@ -308,10 +371,20 @@
     if (tabBtn.classList.contains("active") || tabBtn.closest?.(".active")) {
       return getCurrentRaceNoFromDom() === n;
     }
+    syncDebug(`切换场次 #raceno_${n}`);
+    try {
+      tabBtn.scrollIntoView({ block: "nearest", inline: "center" });
+    } catch {
+      /* ignore */
+    }
     firePointerClick(tabBtn);
     firePointerClick(tabBtn.querySelector("h3, span"));
-    await sleep(isCrossAlupPage() ? 80 : 50);
-    return true;
+    await sleep(isCrossAlupPage() ? 100 : 60);
+    await pollUntil(
+      () => getCurrentRaceNoFromDom() === n || document.querySelector(`#raceno_${n}.active`),
+      { interval: pollMs(), maxMs: 2800 }
+    );
+    return getCurrentRaceNoFromDom() === n;
   }
 
   function pageMismatchPayload(targetUrl, raceNo, want, cur) {
@@ -335,18 +408,21 @@
   }
 
   function isOnTargetRacePage(targetUrl, raceNo, venueCode) {
-    const want = parseHkjcRacePath(targetUrl);
-    const cur = parseHkjcRacePath(location.href);
-    const wantVenue = String(venueCode ?? want?.venue ?? "").trim().toUpperCase();
+    const wantVenue = String(venueCode ?? parseHkjcRacePath(targetUrl)?.venue ?? "")
+      .trim()
+      .toUpperCase();
     const wantRace = Number(raceNo);
     const domRace = getCurrentRaceNoFromDom();
     const domVenue = getCurrentVenueFromDom();
 
-    if (want?.date && cur?.date && want.date !== cur.date) return false;
-
-    if (domRace === wantRace) {
+    /** 頂欄 #venue_* / #raceno_* 為準（越洋 S1/S2/S3 切換時 URL 常不變） */
+    if (Number.isFinite(wantRace) && wantRace > 0 && domRace === wantRace) {
       if (!wantVenue || !domVenue || domVenue === wantVenue) return true;
     }
+
+    const want = parseHkjcRacePath(targetUrl);
+    const cur = parseHkjcRacePath(location.href);
+    if (want?.date && cur?.date && want.date !== cur.date) return false;
 
     return Boolean(
       cur &&
@@ -354,6 +430,25 @@
         cur.date === want.date &&
         (!wantVenue || cur.venue === wantVenue) &&
         Number(cur.race) === wantRace
+    );
+  }
+
+  async function navigateToTargetMeetingUrl(targetUrl) {
+    if (!targetUrl || location.href === targetUrl) return;
+    const want = parseHkjcRacePath(targetUrl);
+    const cur = parseHkjcRacePath(location.href);
+    if (want?.date && cur?.date && want.date === cur.date) return;
+    if (trySpaNavigateToUrl(targetUrl)) {
+      await sleep(isCrossAlupPage() ? 900 : 650);
+      return;
+    }
+    location.assign(targetUrl);
+    await pollUntil(
+      () => {
+        const now = parseHkjcRacePath(location.href);
+        return now?.date === want?.date ? true : null;
+      },
+      { interval: pollMs(), maxMs: isCrossAlupPage() ? 4500 : 3500 }
     );
   }
 
@@ -410,22 +505,32 @@
   }
 
   /** 左側「賠率」菜單：#wp 獨贏/位置、#wpq 連贏/位置Q（SPA 切換，不清投注區） */
-  function clickLeftMenuPool(menuId) {
+  async function clickLeftMenuPool(menuId) {
     const id = String(menuId || "").trim();
     if (!id) return false;
+    if (isLeftPoolMenuActive(id)) return true;
+    syncDebug(`切换玩法 #${id}`);
     const el =
       document.querySelector(`li#${id}`) ||
       document.getElementById(id) ||
       document.querySelector(`#${id}.cursor-pointer`);
-    if (!el || el.offsetParent === null) return false;
-    if (isLeftPoolMenuActive(id)) return true;
+    if (!el) return false;
+    try {
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
     firePointerClick(el);
     firePointerClick(el.querySelector("span"));
-    return true;
+    const ok = await pollUntil(() => isLeftPoolMenuActive(id), {
+      interval: pollMs(),
+      maxMs: isCrossAlupPage() ? 2200 : 1800,
+    });
+    return Boolean(ok);
   }
 
   /**
-   * 同步準備：① 左側玩法 → ② 馬場 + 場次（與人手操作順序一致）
+   * 同步準備：① 馬場 + 場次 → ② 左側玩法（與官網人手操作順序一致）
    */
   async function prepareHkjcUiForSync(
     payload,
@@ -441,29 +546,6 @@
     const needQin = qinFinal.length > 0;
     const needQpl = qplFinal.length > 0;
 
-    if (needWpFirst) {
-      await ensureWinPoolTab({ soft: false });
-    } else if (needQin || needQpl) {
-      await ensureWpqPoolReady({ soft: true });
-      if (needQin && !needQpl) {
-        await ensureWpqSubType("QIN", { soft: true });
-        const { singles, batches } = partitionQinBankerBatches(qinFinal);
-        const { extraSingles } = expandBankerBatchesForSync(batches);
-        if (singles.length || extraSingles.length) {
-          await ensureWpqBoxBetMode();
-        } else if (batches.length) {
-          await ensureQinBankerBetMode();
-        }
-      } else if (needQpl && !needQin) {
-        await ensureWpqSubType("QPL", { soft: true });
-        const { singles, batches } = partitionQinBankerBatches(qplFinal);
-        const { extraSingles } = expandBankerBatchesForSync(batches);
-        if (singles.length || extraSingles.length) {
-          await ensureWpqBoxBetMode();
-        }
-      }
-    }
-
     await ensureOnRacePage(targetUrl, raceNo, venueCode, {
       strictSamePage: payload.strictSamePage !== false,
     });
@@ -472,38 +554,61 @@
     if (!isRaceDomReady(r)) {
       await waitForRaceReady(r, isCrossAlupPage() ? 3500 : 2500);
     }
+
+    if (needWpFirst) {
+      await ensureWinPoolTab({ soft: false });
+    } else if (needQin || needQpl) {
+      await ensureWpqPoolReady({ soft: false });
+      if (needQin && !needQpl) {
+        await ensureWpqSubType("QIN", { soft: false });
+        const { singles, batches } = partitionQinBankerBatches(qinFinal);
+        const { extraSingles } = expandBankerBatchesForSync(batches);
+        if (singles.length || extraSingles.length) {
+          await ensureWpqBoxBetMode();
+        } else if (batches.length) {
+          await ensureQinBankerBetMode();
+        }
+      } else if (needQpl && !needQin) {
+        await ensureWpqSubType("QPL", { soft: false });
+        const { singles, batches } = partitionQinBankerBatches(qplFinal);
+        const { extraSingles } = expandBankerBatchesForSync(batches);
+        if (singles.length || extraSingles.length) {
+          await ensureWpqBoxBetMode();
+        }
+      }
+    }
+
     return buildSyncPrepState(r);
   }
 
   /**
-   * 嚴格同頁：僅點場次 Tab / 左側彩池菜單，不 tabs.update、不 location.assign。
-   * 同日不同馬場（ST/S1/S2）由 #venue_* 切換，不以 URL 為唯一準則。
+   * 同步準備步驟 ①：切馬場 #venue_* → 切場次 #raceno_*（必要時改址至正確賽馬日）
+   * 越洋同日多馬場以 DOM 頂欄為準，不依 URL 判斷是否已就緒。
    */
   async function ensureOnRacePage(targetUrl, raceNo, venueCode, opts = {}) {
     const strict = opts.strictSamePage !== false;
     const want = parseHkjcRacePath(targetUrl);
-    const cur = parseHkjcRacePath(location.href);
     const venue = String(venueCode ?? want?.venue ?? "").trim().toUpperCase();
     const r = Number(raceNo);
 
-    if (strict && want?.date && cur?.date && want.date !== cur.date) {
-      const err = new Error("PAGE_MISMATCH");
-      err.code = "PAGE_MISMATCH";
-      Object.assign(err, pageMismatchPayload(targetUrl, raceNo, want, cur));
-      throw err;
-    }
+    await navigateToTargetMeetingUrl(targetUrl);
 
-    if (isOnTargetRacePage(targetUrl, raceNo, venue)) return;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (isOnTargetRacePage(targetUrl, raceNo, venue)) return;
 
-    if (venue) {
-      await ensureVenueTab(venue);
-      await sleep(isCrossAlupPage() ? 100 : 60);
-    }
-
-    if (getCurrentRaceNoFromDom() !== r) {
-      if (await clickRaceNoTab(r)) {
-        await waitForRaceReady(r);
+      if (venue) {
+        await ensureVenueTab(venue);
+        await sleep(isCrossAlupPage() ? 140 : 90);
       }
+
+      if (getCurrentRaceNoFromDom() !== r) {
+        if (await clickRaceNoTab(r)) {
+          await waitForRaceReady(r, isCrossAlupPage() ? 4000 : 3000);
+        }
+      }
+
+      if (isOnTargetRacePage(targetUrl, raceNo, venue)) return;
+      await sleep(isCrossAlupPage() ? 180 : 120);
     }
 
     if (isOnTargetRacePage(targetUrl, raceNo, venue)) return;
@@ -543,14 +648,21 @@
   /** soft：已在獨贏/連贏表時不切彩池，避免右側投注區被馬會重置 */
   async function ensureWinPoolTab(opts = {}) {
     if (opts.soft !== false && isWinPoolReadyInUi()) return;
-    if (!clickLeftMenuPool("wp")) {
+    const clicked = await clickLeftMenuPool("wp");
+    if (!clicked) {
       clickPoolNav((t) => /獨贏/.test(t) && /位置/.test(t));
       clickPoolNav((t) => /^獨贏/.test(t) || (t.includes("獨贏") && t.length <= 12));
     }
-    await pollUntil(() => document.querySelector('input[id^="wpleg_WIN_"]'), {
-      interval: pollMs(),
-      maxMs: isCrossAlupPage() ? 1400 : 900,
-    });
+    await pollUntil(
+      () =>
+        isLeftPoolMenuActive("wp") &&
+        document.querySelector('input[id^="wpleg_WIN_"]'),
+      {
+        interval: pollMs(),
+        maxMs: isCrossAlupPage() ? 2800 : 2000,
+      }
+    );
+    await sleep(isCrossAlupPage() ? 120 : 80);
   }
 
   function isUiVisible(el) {
@@ -724,17 +836,22 @@
 
   async function ensureWpqPoolReady(opts = {}) {
     if (opts.soft !== false && isWpqPoolReadyInUi()) return;
-    if (!clickLeftMenuPool("wpq")) {
+    const clicked = await clickLeftMenuPool("wpq");
+    if (!clicked) {
       const ok = clickPoolNav((t) => /連贏/.test(t) && (/位置Q|位置 Q/.test(t) || /QPL/.test(t)));
       if (!ok) clickPoolNav((t) => /^連贏/.test(t) || t.includes("連贏 /"));
     }
     await pollUntil(
-      () => document.querySelector('input[id^="wpleg_QIN_"], input[id^="wpleg_QPL_"]'),
+      () =>
+        isLeftPoolMenuActive("wpq") &&
+        (document.querySelector('input[id^="wpleg_QIN_"]') ||
+          document.querySelector('input[id^="wpleg_QPL_"]')),
       {
-      interval: pollMs(),
-      maxMs: isCrossAlupPage() ? 1400 : 900,
-    }
+        interval: pollMs(),
+        maxMs: isCrossAlupPage() ? 2800 : 2000,
+      }
     );
+    await sleep(isCrossAlupPage() ? 120 : 80);
   }
 
   async function ensureQinPoolTab(opts = {}) {
@@ -846,13 +963,19 @@
   }
 
   function readStakeFromLine(line) {
-    const input =
-      line?.querySelector("input.OfInnerInput") ||
-      line?.querySelector('input[type="text"]') ||
-      line?.querySelector("input");
-    if (!input) return null;
-    const n = Number(String(input.value || "").replace(/[^\d.]/g, ""));
-    return Number.isFinite(n) ? normalizeStakeTen(n) : null;
+    const roots = [
+      line?.querySelector(".collapse-content-r"),
+      line?.querySelector(".unit-stake"),
+      line,
+    ].filter(Boolean);
+    for (const root of roots) {
+      for (const input of root.querySelectorAll("input.OfInnerInput, input[type='text'], input")) {
+        if (!input || input.disabled || input.type === "checkbox") continue;
+        const n = Number(String(input.value || "").replace(/[^\d.]/g, ""));
+        if (Number.isFinite(n) && n > 0) return normalizeStakeTen(n);
+      }
+    }
+    return null;
   }
 
   /** 從馬會文案解析港幣十位金額（如 $160.00 → 160） */
@@ -880,29 +1003,102 @@
     return per * n;
   }
 
-  /** 該行金額是否已由馬會接受（行小計與每注額×注數一致） */
+  /** 該行金額是否已由馬會接受（優先看行內 input，再看行小計文案） */
   function isLineStakeCommitted(line, stake) {
-    const meta = readLineBetMeta(line);
     const wantPer = normalizeStakeTen(stake);
+    const inputStake = readStakeFromLine(line);
+    if (inputStake === wantPer) return true;
+    const meta = readLineBetMeta(line);
     const wantCommitted = expectedLineCommittedAmount(stake, meta.betCount);
     if (meta.committedAmount != null) return meta.committedAmount === wantCommitted;
-    const inputStake = readStakeFromLine(line);
-    return inputStake === wantPer;
+    return false;
+  }
+
+  /** 行內文案「投注金額」是否已與目標一致（比 input 顯示值更可靠） */
+  function isLineStakeReactCommitted(line, stake) {
+    const meta = readLineBetMeta(line);
+    const wantCommitted = expectedLineCommittedAmount(stake, meta.betCount);
+    if (meta.committedAmount != null) return meta.committedAmount === wantCommitted;
+    return isLineStakeCommitted(line, stake);
   }
 
   /** 投注區底部「總投注金額」 */
   function readBetSlipGrandTotal() {
-    const roots = [
+    const scopes = [
       document.querySelector("#betslip-panel"),
-      document.querySelector('[data-testid="bet_placeBetList_scrollView"]')?.parentElement,
-      document.body,
+      document.querySelector('[data-testid="bet_placeBetList_scrollView"]')?.closest("[class*='slip'], [class*='Slip'], div"),
+      document.querySelector("#betslip-panel")?.parentElement,
     ].filter(Boolean);
-    for (const root of roots) {
-      const text = (root.textContent || "").replace(/\s+/g, " ");
-      const m = /總投注金[额額]\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i.exec(text);
-      if (m) return parseHkdFromText(m[1]);
+
+    const labelRe = /[總总]投注金[额額]?\s*[:：]?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/gi;
+    for (const scope of scopes) {
+      const text = (scope.innerText || scope.textContent || "").replace(/\s+/g, " ");
+      const matches = [...text.matchAll(labelRe)];
+      if (matches.length) {
+        const n = parseHkdFromText(matches[matches.length - 1][1]);
+        if (n != null) {
+          const lineSum = sumSlipLineInputStakes();
+          if (!getBetLines().length && lineSum <= 0 && n === 10) continue;
+          return n;
+        }
+      }
     }
+
+    for (const scope of scopes) {
+      for (const el of scope.querySelectorAll("[class*='total'], [class*='Total'], [class*='grand']")) {
+        const t = (el.textContent || "").replace(/\s+/g, " ");
+        const m = /\$?\s*([\d,]+(?:\.\d{1,2})?)\s*$/.exec(t.trim());
+        if (m) {
+          const n = parseHkdFromText(m[1]);
+          if (n != null && n >= 10) return n;
+        }
+      }
+    }
+
+    const committedSum = sumSlipLineCommittedStakes();
+    if (committedSum > 0) return committedSum;
     return null;
+  }
+
+  function sumSlipLineCommittedStakes() {
+    let sum = 0;
+    let any = false;
+    for (const line of getBetLines()) {
+      const meta = readLineBetMeta(line);
+      if (meta.committedAmount != null) {
+        sum += meta.committedAmount;
+        any = true;
+      }
+    }
+    return any ? normalizeStakeTen(sum) : 0;
+  }
+
+  function sumSlipLineInputStakes() {
+    return getBetLines().reduce((s, line) => s + (readStakeFromLine(line) || 0), 0);
+  }
+
+  function captureSlipBaseline() {
+    const lineCount = getBetLines().length;
+    const lineInputSum = sumSlipLineInputStakes();
+    let grandTotal = readBetSlipGrandTotal();
+    if (lineCount === 0 && lineInputSum <= 0) grandTotal = null;
+    return { lineCount, lineInputSum, grandTotal };
+  }
+
+  function normalizeSlipBaseline(baseline) {
+    if (baseline && typeof baseline === "object" && "lineInputSum" in baseline) {
+      return {
+        lineCount: Number(baseline.lineCount) || 0,
+        lineInputSum: Number(baseline.lineInputSum) || 0,
+        grandTotal:
+          baseline.grandTotal != null && Number.isFinite(Number(baseline.grandTotal))
+            ? normalizeStakeTen(baseline.grandTotal)
+            : null,
+      };
+    }
+    const grand =
+      baseline != null && Number.isFinite(Number(baseline)) ? normalizeStakeTen(baseline) : null;
+    return { lineCount: getBetLines().length, lineInputSum: sumSlipLineInputStakes(), grandTotal: grand };
   }
 
   function sumItemsStake(items) {
@@ -929,7 +1125,8 @@
     return false;
   }
 
-  function buildSkippedGrandTotalVerify(expectedDelta, slipTotalBefore) {
+  function buildSkippedGrandTotalVerify(expectedDelta, slipBaseline) {
+    const b = normalizeSlipBaseline(slipBaseline);
     const want = normalizeStakeTen(expectedDelta);
     return {
       ok: true,
@@ -937,24 +1134,22 @@
       expectedDelta: want,
       actualDelta: null,
       grandTotal: readBetSlipGrandTotal(),
-      slipTotalBefore:
-        slipTotalBefore != null && Number.isFinite(Number(slipTotalBefore))
-          ? normalizeStakeTen(slipTotalBefore)
-          : null,
+      slipTotalBefore: b.grandTotal,
+      lineInputSum: sumSlipLineInputStakes(),
     };
   }
 
-  function buildStakeVerifyForSync(payload, syncedItems, slipTotalBefore, qinFinal, qplFinal) {
+  function buildStakeVerifyForSync(payload, syncedItems, slipBaseline, qinFinal, qplFinal) {
     const expectedDelta = sumItemsStake(syncedItems);
     if (shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal)) {
-      return buildSkippedGrandTotalVerify(expectedDelta, slipTotalBefore);
+      return buildSkippedGrandTotalVerify(expectedDelta, slipBaseline);
     }
-    return buildStakeVerifySnapshot(expectedDelta, slipTotalBefore);
+    return buildStakeVerifySnapshot(expectedDelta, slipBaseline);
   }
 
-  async function verifySyncStakeTotalsIfNeeded(payload, slipTotalBefore, items, qinFinal, qplFinal) {
+  async function verifySyncStakeTotalsIfNeeded(payload, slipBaseline, items, qinFinal, qplFinal) {
     if (shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal)) return;
-    await verifySyncStakeTotals(slipTotalBefore, items);
+    await verifySyncStakeTotals(slipBaseline, items);
   }
 
   function horseFromWinCheckboxId(id) {
@@ -985,6 +1180,58 @@
       const h = horseFromWinCheckboxId(cb.id);
       if (h && !keep.has(h)) await setCheckboxChecked(cb, false, 35);
     }
+  }
+
+  /**
+   * 取消左側勾選，但**不**動已在投注區、金額正確的馬（取消勾選會把該注從投注區清掉）。
+   */
+  async function uncheckWinSelectionNotInSlip(raceNo, stakePerLine, keepHorse = null) {
+    const keep = keepHorse != null ? String(Number(keepHorse)) : null;
+    const wantStake = normalizeStakeTen(stakePerLine);
+    const r = Number(raceNo);
+    for (const cb of document.querySelectorAll(`input[id^="wpleg_WIN_${r}_"]:checked`)) {
+      const h = horseFromWinCheckboxId(cb.id);
+      if (!h) continue;
+      if (keep && h === keep) continue;
+      if (slipHasWinLineExact(h, wantStake)) continue;
+      await setCheckboxChecked(cb, false, 35);
+    }
+  }
+
+  async function uncheckPlaSelectionNotInSlip(raceNo, stakePerLine, keepHorse = null) {
+    const keep = keepHorse != null ? String(Number(keepHorse)) : null;
+    const wantStake = normalizeStakeTen(stakePerLine);
+    const r = Number(raceNo);
+    for (const cb of document.querySelectorAll(`input[id^="wpleg_PLA_${r}_"]:checked`)) {
+      const h = horseFromPlaCheckboxId(cb.id);
+      if (!h) continue;
+      if (keep && h === keep) continue;
+      if (slipHasPlaLineExact(h, wantStake)) continue;
+      await setCheckboxChecked(cb, false, 35);
+    }
+  }
+
+  /** 添加到投注區後，等馬會自行取消左側勾選（勿手動 uncheck，否則會清掉剛加入的注） */
+  async function waitWinHorseCheckboxReleased(raceNo, horse, venueCode) {
+    await pollUntil(
+      () => {
+        const cb = findWinCheckbox(raceNo, horse, venueCode);
+        if (!cb) return true;
+        return !cb.checked ? true : null;
+      },
+      { interval: pollMs(), maxMs: isCrossAlupPage() ? 3200 : 2600 }
+    );
+  }
+
+  async function waitPlaHorseCheckboxReleased(raceNo, horse, venueCode) {
+    await pollUntil(
+      () => {
+        const cb = findPlaCheckbox(raceNo, horse, venueCode);
+        if (!cb) return true;
+        return !cb.checked ? true : null;
+      },
+      { interval: pollMs(), maxMs: isCrossAlupPage() ? 3200 : 2600 }
+    );
   }
 
   async function uncheckPlaExcept(raceNo, keepHorses) {
@@ -1874,27 +2121,558 @@
     return (
       document.querySelector("button.AddToSlip") ||
       document.querySelector(".AddToSlip") ||
-      [...document.querySelectorAll("button, a, [role='button']")].find((el) =>
-        /加入|添加|add/i.test(el.textContent || "")
+      document.querySelector(".addSlip .AddToSlip") ||
+      [...document.querySelectorAll("button, a, [role='button'], div.AddToSlip")].find((el) =>
+        /加入投注區|添加到投注區|加入|添加|add/i.test(el.textContent || "")
       )
     );
+  }
+
+  /** 官網「投注計算機」每注金額輸入框（.unitBetInput） */
+  function findUnitBetInput() {
+    const root = document.querySelector(".investment-cal");
+    if (root) {
+      for (const el of root.querySelectorAll("input.unitBetInput, input.OfInnerInput")) {
+        if (el.disabled || el.classList.contains("betTotalInput")) continue;
+        if (el.closest(".investment-cal-bettotal")) continue;
+        if (isUiVisible(el)) return el;
+      }
+    }
+    return (
+      document.querySelector(".investment-cal-unitbet-input input.OfInnerInput:not([disabled])") ||
+      document.querySelector("input.unitBetInput:not([disabled])")
+    );
+  }
+
+  function readCalculatorBetCount() {
+    const root = document.querySelector(".investment-cal");
+    if (!root) return null;
+    const text = (root.textContent || "").replace(/\s+/g, " ");
+    const m = /注[数數]\s*[:：]?\s*(\d+)/i.exec(text);
+    if (m) return Math.max(0, Number(m[1]) || 0);
+    return null;
+  }
+
+  function readCalculatorBetTotal() {
+    const root = document.querySelector(".investment-cal");
+    if (!root) return null;
+    const input =
+      root.querySelector(".investment-cal-bettotal input.OfInnerInput") ||
+      root.querySelector("input.betTotalInput");
+    if (!input) return null;
+    const raw = String(input.value ?? "").replace(/[^\d.]/g, "");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? normalizeStakeTen(n) : null;
+  }
+
+  /** 馬會「添加」按鈕讀取的是計算機「投注金額」總額，非僅每注 input 顯示值 */
+  async function waitCalculatorBetTotalCommitted(stake, maxMs) {
+    const count = readCalculatorBetCount() || 1;
+    const wantTotal = expectedLineCommittedAmount(stake, count);
+    const ok = await pollUntil(
+      () => {
+        const unit = findUnitBetInput();
+        const unitOk = unit && isUnitBetInputCommitted(unit, stake);
+        const total = readCalculatorBetTotal();
+        return unitOk && total === wantTotal ? true : null;
+      },
+      { interval: stakeFillPollMs(), maxMs: maxMs ?? (isCrossAlupPage() ? 4800 : 3800) }
+    );
+    return Boolean(ok);
+  }
+
+  function findCalculatorBlurTarget(calcInput) {
+    const root = document.querySelector(".investment-cal");
+    return (
+      root?.querySelector(".investment-cal-lbl") ||
+      root?.querySelector(".investment-cal-betno") ||
+      root?.querySelector(".investment-cal-bettotal") ||
+      root
+    );
+  }
+
+  /** 人手：点 .unitBetInput → 点框外（或「添加」），让 React 接受每注金额 */
+  async function commitCalculatorStakeByFocusBlur(calcInput) {
+    if (!calcInput) return false;
+    const outside = findCalculatorBlurTarget(calcInput);
+    let inputId = calcInput.id;
+    let outsideId = outside?.id;
+    let assignedIn = false;
+    let assignedOut = false;
+    if (!inputId) {
+      inputId = `raceplugin-calc-in-${Date.now().toString(36)}`;
+      calcInput.id = inputId;
+      assignedIn = true;
+    }
+    if (outside && !outsideId) {
+      outsideId = `raceplugin-calc-out-${Date.now().toString(36)}`;
+      outside.id = outsideId;
+      assignedOut = true;
+    }
+    try {
+      await runMainWorldOp({
+        type: "focus-blur",
+        inputId,
+        outsideId: outsideId || null,
+      });
+    } finally {
+      if (assignedIn) {
+        setTimeout(() => {
+          try {
+            calcInput.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+      if (assignedOut && outside) {
+        setTimeout(() => {
+          try {
+            outside.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+    }
+    await sleep(isCrossAlupPage() ? 120 : 85);
+    return true;
+  }
+
+  /**
+   * 人手第⑤步：在计算器 input 已填金额后，一次 native click 点「添加」
+   * （点添加会先 blur 计算器，等同人手）。
+   */
+  async function clickCalcInputThenAddToSlip(calcInput) {
+    const addBtn = findAddToSlipButton();
+    if (!addBtn) throw new Error("MISSING_ADD_TO_SLIP");
+    let inputId = calcInput.id;
+    let addId = addBtn.id;
+    let assignedIn = false;
+    let assignedAdd = false;
+    if (!inputId) {
+      inputId = `raceplugin-calc-in-${Date.now().toString(36)}`;
+      calcInput.id = inputId;
+      assignedIn = true;
+    }
+    if (!addId) {
+      addId = `raceplugin-add-${Date.now().toString(36)}`;
+      addBtn.id = addId;
+      assignedAdd = true;
+    }
+    try {
+      await runMainWorldOp({ type: "calc-add-sequence", inputId, addId });
+    } finally {
+      if (assignedIn) {
+        setTimeout(() => {
+          try {
+            calcInput.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+      if (assignedAdd) {
+        setTimeout(() => {
+          try {
+            addBtn.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+    }
+    await sleep(isCrossAlupPage() ? 140 : 100);
+  }
+
+  async function commitCalculatorStakeToReact(input, stake) {
+    await commitCalculatorStakeByFocusBlur(input);
+    await sleep(isCrossAlupPage() ? 80 : 55);
+    return waitCalculatorBetTotalCommitted(stake);
+  }
+
+  async function ensureInvestmentCalculatorExpanded() {
+    const root = document.querySelector(".investment-cal");
+    if (!root) return;
+    const input = findUnitBetInput();
+    if (input && isUiVisible(input)) return;
+    const toggle =
+      root.querySelector(".investment-cal-arow") ||
+      root.querySelector(".investment-cal-arrow") ||
+      root.querySelector('[class*="investment-cal"] [class*="arrow"]');
+    if (toggle) {
+      firePointerClick(toggle);
+      await sleep(isCrossAlupPage() ? 120 : 90);
+    }
+  }
+
+  /** 勾選生效後，計算機「注數」應 ≥ minCount（非「-」） */
+  async function waitInvestmentCalculatorReady(minCount = 1, maxMs) {
+    await ensureInvestmentCalculatorExpanded();
+    const ok = await pollUntil(
+      () => {
+        const n = readCalculatorBetCount();
+        return n != null && n >= minCount ? true : null;
+      },
+      { interval: stakeFillPollMs(), maxMs: maxMs ?? (isCrossAlupPage() ? 3200 : 2600) }
+    );
+    return Boolean(ok);
+  }
+
+  function isUnitBetInputCommitted(input, stake) {
+    const want = String(normalizeStakeTen(stake));
+    const got = String(input?.value ?? "").replace(/[^\d]/g, "");
+    return got === want;
+  }
+
+  /** 人手步驟 ④：在投注計算機填每注金額 */
+  async function fillInvestmentCalculatorStake(stake) {
+    const want = normalizeStakeTen(stake);
+    const stakeStr = String(want);
+    await ensureInvestmentCalculatorExpanded();
+    const input = await pollUntil(() => {
+      const el = findUnitBetInput();
+      return el && isUiVisible(el) && !el.disabled ? el : null;
+    }, {
+      interval: stakeFillPollMs(),
+      maxMs: 3200,
+    });
+    if (!input) throw new Error("NO_UNIT_BET_INPUT");
+    try {
+      input.scrollIntoView({ block: "nearest", inline: "nearest" });
+      input.focus();
+      input.click();
+    } catch {
+      /* ignore */
+    }
+    await sleep(stakePreFillMs());
+    await typeInputValueInMainWorld(input, stakeStr);
+    await sleep(stakePostTypeMs());
+    await commitCalculatorStakeByFocusBlur(input);
+    if (
+      isUnitBetInputCommitted(input, want) &&
+      (await waitCalculatorBetTotalCommitted(want, isCrossAlupPage() ? 2200 : 1600))
+    ) {
+      return input;
+    }
+    await setInputValueInMainWorld(input, stakeStr);
+    await sleep(stakePostTypeMs());
+    await commitCalculatorStakeByFocusBlur(input);
+    if (
+      isUnitBetInputCommitted(input, want) &&
+      (await waitCalculatorBetTotalCommitted(want, isCrossAlupPage() ? 2200 : 1600))
+    ) {
+      return input;
+    }
+    if (isUnitBetInputCommitted(input, want)) {
+      if (await waitCalculatorBetTotalCommitted(want, isCrossAlupPage() ? 2200 : 1600)) {
+        return input;
+      }
+    }
+    await typeStakeIntoInput(input, stakeStr, { stakeFill: true });
+    const ok = await pollUntil(() => (isUnitBetInputCommitted(input, want) ? true : null), {
+      interval: stakeFillPollMs(),
+      maxMs: 3200,
+    });
+    if (!ok) throw new Error("HKJC_CALC_STAKE_FILL_FAILED");
+    if (!(await commitCalculatorStakeToReact(input, want))) {
+      throw new Error("HKJC_CALC_TOTAL_NOT_READY");
+    }
+    return input;
+  }
+
+  async function rollbackSlipAddsSince(slipBefore, matcher) {
+    for (const line of [...getBetLines().slice(slipBefore)].filter(matcher)) {
+      await clickRemoveBetLine(line);
+    }
+  }
+
+  /**
+   * 人手 ④⑤：填投注計算機 → 添加到投注區 → 校驗；若「添加」仍帶入預設 $10 則在注單行補填（程式化添加限制）。
+   * 勾選後若已有自動加行，先移除再填計算機，避免 $10 殘留或匹配錯行。
+   */
+  async function commitSelectionViaCalculator(stake, slipBefore, matcher) {
+    const before = Number.isFinite(slipBefore) ? slipBefore : getBetLines().length;
+    const want = normalizeStakeTen(stake);
+    await discardPrematureSlipLines(before, matcher, stake);
+    syncDebug(`等待计算器注数 ≥ 1（当前 ${readCalculatorBetCount() ?? "-"}）`);
+    if (!(await waitInvestmentCalculatorReady(1))) {
+      throw new Error("HKJC_CALC_NOT_READY");
+    }
+    syncDebug(`填计算机 .unitBetInput → ${want}`);
+    const calcInput = await fillInvestmentCalculatorStake(stake);
+    if (!isUnitBetInputCommitted(calcInput, stake)) {
+      throw new Error("HKJC_CALC_STAKE_FILL_FAILED");
+    }
+    const betCount = readCalculatorBetCount() || 1;
+    const betTotal = readCalculatorBetTotal();
+    syncDebug(`计算器已确认 每注 $${want} × ${betCount} = 总额 $${betTotal ?? "?"}`);
+    if (betTotal !== expectedLineCommittedAmount(stake, betCount)) {
+      throw new Error("HKJC_CALC_TOTAL_NOT_READY");
+    }
+    syncDebug("点击添加", ".AddToSlip（计算器 focus → 添加，等同人手 blur）");
+    await clickCalcInputThenAddToSlip(calcInput);
+    let line = await pollUntil(() => findAddedBetLine(matcher, before, { preferStake: stake }), {
+      interval: pollMs(),
+      maxMs: isCrossAlupPage() ? 3200 : 2600,
+    });
+    if (!line) line = findNewestBetLine(matcher);
+    if (!line) throw new Error("NO_BET_LINE_MATCH");
+    if (!isLineStakeCommitted(line, stake)) {
+      const lineStake = readStakeFromLine(line);
+      if (lineStake === 10 || lineStake === normalizeStakeTen(10)) {
+        syncDebug(`添加后仍为默认 $10，注单行补填 → $${want}（计算器 React 未入账时的兜底）`);
+        await fillStakeOnLine(line, stake);
+      }
+    } else {
+      syncDebug(`添加后注单行 ✓ $${want}（计算器→添加，无需补填）`);
+    }
+    await commitLineStakeByFocusBlur(line);
+    try {
+      await assertStakeCommitted(line, stake);
+      syncDebug(`校验注单行 ✓ $${want}（投注区共 ${getBetLines().length} 行）`);
+    } catch (e) {
+      syncDebug(
+        "金额校验失败",
+        `want=$${want} lineInput=$${readStakeFromLine(line) ?? "?"} committed=$${e?.gotCommitted ?? readLineBetMeta(line).committedAmount ?? "?"} inputs=${debugLineStakeSnapshot(line)}`
+      );
+      syncDebugErr("回滚本注", e);
+      await rollbackSlipAddsSince(before, matcher);
+      throw e;
+    }
+    return line;
+  }
+
+  /** @deprecated 使用 commitSelectionViaCalculator */
+  async function addWinPlaSingleViaCalculator(matcher, stake, slipBefore) {
+    return commitSelectionViaCalculator(stake, slipBefore, matcher);
   }
 
   function setNativeInputValue(input, value) {
     const proto = window.HTMLInputElement?.prototype;
     const setter = proto && Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    const tracker = input?._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(String(input.value ?? ""));
+      } catch {
+        /* ignore */
+      }
+    }
     if (setter) setter.call(input, value);
     else input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  function stakeInputFromLine(line) {
-    return (
-      line?.querySelector("input.OfInnerInput") ||
-      line?.querySelector('input[type="text"]') ||
-      line?.querySelector("input")
+  async function withTempElementId(el, fn) {
+    let tempId = el.id;
+    let assignedId = false;
+    if (!tempId) {
+      tempId = `raceplugin-tmp-${Date.now().toString(36)}`;
+      el.id = tempId;
+      assignedId = true;
+    }
+    try {
+      return await fn(tempId);
+    } finally {
+      if (assignedId) {
+        setTimeout(() => {
+          try {
+            el.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+    }
+  }
+
+  async function runMainWorldOp(op) {
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: "HKJC_MAIN_WORLD_OP", op });
+      if (resp?.ok) return resp;
+    } catch {
+      /* fallback below */
+    }
+    dispatchMainWorldOp(op);
+    await sleep(isCrossAlupPage() ? 60 : 40);
+    return { ok: true };
+  }
+
+  function dispatchMainWorldOp(op) {
+    document.documentElement.setAttribute("data-raceplugin-main-op", JSON.stringify(op));
+    document.dispatchEvent(
+      new CustomEvent(
+        op.type === "set-input" || op.type === "type-input" || op.type === "insert-text" || op.type === "commit-input"
+          ? "raceplugin-main-set-input"
+          : "raceplugin-main-click",
+        { detail: op, bubbles: true, composed: true }
+      )
     );
+  }
+
+  /** 在页面 MAIN world 写入 React 受控 input */
+  async function setInputValueInMainWorld(input, value) {
+    if (!input) return false;
+    await withTempElementId(input, async (tempId) => {
+      await runMainWorldOp({ type: "set-input", tempId, value: String(value) });
+    });
+    return true;
+  }
+
+  /** 在 MAIN world 逐字输入（模拟人手，让 React 内部状态与 DOM 一致） */
+  async function typeInputValueInMainWorld(input, value) {
+    if (!input) return false;
+    await withTempElementId(input, async (tempId) => {
+      await runMainWorldOp({ type: "type-input", tempId, value: String(value) });
+    });
+    return true;
+  }
+
+  /** 在 MAIN world 用 insertText（部分 React 表单比 setValue 更易入账） */
+  async function insertTextValueInMainWorld(input, value) {
+    if (!input) return false;
+    await withTempElementId(input, async (tempId) => {
+      await runMainWorldOp({ type: "insert-text", tempId, value: String(value) });
+    });
+    return true;
+  }
+
+  /** 在 MAIN world 触发完整 pointer/click */
+  async function clickElementInMainWorld(el) {
+    if (!el) return false;
+    await withTempElementId(el, async (tempId) => {
+      await runMainWorldOp({ type: "click", tempId });
+    });
+    return true;
+  }
+
+  /** Enter + blur（备用；马会 cross_alup 以「点 input → 点框外」入账更可靠） */
+  async function commitLineStakeInMainWorld(input) {
+    if (!input) return false;
+    await withTempElementId(input, async (tempId) => {
+      await runMainWorldOp({ type: "commit-input", tempId });
+    });
+    return true;
+  }
+
+  /** 注单行金额框外的安全点击目标（避开移除按钮与其它 input） */
+  function findStakeBlurTarget(line, input) {
+    const candidates = [
+      line?.querySelector(".collapse-betline"),
+      line?.querySelector(".guoguan"),
+      line?.querySelector(".collapse-content-l"),
+      line?.querySelector(".bet-type-col"),
+      line?.querySelector(".title > div:first-child"),
+    ].filter(Boolean);
+    for (const el of candidates) {
+      if (input && el.contains(input)) continue;
+      if (el.querySelector?.("input.OfInnerInput, input[type='text']") === input) continue;
+      return el;
+    }
+    const panel = document.querySelector("#betslip-panel");
+    return panel?.querySelector('[class*="header"]') || panel;
+  }
+
+  /**
+   * 模拟人手：原生 click 点金额框 → 点框外（isTrusted），写入「總投注金額」。
+   */
+  async function commitLineStakeByFocusBlur(line) {
+    await ensureBetLineExpanded(line);
+    const input = stakeInputFromLine(line);
+    if (!input || input.disabled) return false;
+    const val = String(input.value ?? "").replace(/[^\d]/g, "");
+    if (!val) return false;
+
+    const outside = findStakeBlurTarget(line, input);
+    let inputId = input.id;
+    let outsideId = outside?.id;
+    let assignedIn = false;
+    let assignedOut = false;
+    if (!inputId) {
+      inputId = `raceplugin-in-${Date.now().toString(36)}`;
+      input.id = inputId;
+      assignedIn = true;
+    }
+    if (outside && !outsideId) {
+      outsideId = `raceplugin-out-${Date.now().toString(36)}`;
+      outside.id = outsideId;
+      assignedOut = true;
+    }
+
+    const grandBefore = readBetSlipGrandTotal();
+    try {
+      await runMainWorldOp({
+        type: "focus-blur",
+        inputId,
+        outsideId: outsideId || null,
+      });
+    } finally {
+      if (assignedIn) {
+        setTimeout(() => {
+          try {
+            input.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+      if (assignedOut && outside) {
+        setTimeout(() => {
+          try {
+            outside.removeAttribute("id");
+          } catch {
+            /* ignore */
+          }
+        }, 400);
+      }
+    }
+
+    await pollUntil(() => {
+      const grand = readBetSlipGrandTotal();
+      const committed = sumSlipLineCommittedStakes();
+      if (grand != null && grandBefore != null && grand > grandBefore) return true;
+      if (grand != null && grandBefore == null && grand >= Number(val)) return true;
+      if (committed > 0 && committed >= Number(val)) return true;
+      return null;
+    }, { interval: pollMs(), maxMs: isCrossAlupPage() ? 2200 : 1600 });
+
+    await sleep(isCrossAlupPage() ? 100 : 70);
+    return true;
+  }
+
+  /** 逐行 focus+blur，使底部「總投注金額」与行内 input 一致 */
+  async function commitAllSlipLineStakesViaFocusBlur() {
+    const lines = getBetLines();
+    for (let i = 0; i < lines.length; i++) {
+      const grandBefore = readBetSlipGrandTotal();
+      await commitLineStakeByFocusBlur(lines[i]);
+      syncDebug(
+        `入账 focus+blur 第 ${i + 1}/${lines.length} 行`,
+        `總投注=$${readBetSlipGrandTotal() ?? "?"} committed=$${sumSlipLineCommittedStakes() || "?"} (前=$${grandBefore ?? "?"})`
+      );
+    }
+  }
+
+  function stakeInputFromLine(line) {
+    const root = line?.querySelector(".collapse-content-r") || line;
+    for (const input of root?.querySelectorAll("input.OfInnerInput, input[type='text'], input") || []) {
+      if (input.disabled || input.type === "checkbox") continue;
+      return input;
+    }
+    return null;
+  }
+
+  function debugLineStakeSnapshot(line) {
+    const inputs = [...(line?.querySelectorAll("input") || [])].map((i) => ({
+      id: i.id || null,
+      val: i.value,
+      disabled: i.disabled,
+      type: i.type,
+    }));
+    return JSON.stringify(inputs);
   }
 
   /** 逐字輸入，React 受控 .OfInnerInput 較易接受；stakeFill 為填額慢路徑 */
@@ -1937,7 +2715,7 @@
   }
 
   async function pollLineStakeCommitted(line, stake, maxMs = 1500) {
-    const ok = await pollUntil(() => (isLineStakeCommitted(line, stake) ? true : null), {
+    const ok = await pollUntil(() => (isLineStakeReactCommitted(line, stake) ? true : null), {
       interval: stakeFillPollMs(),
       maxMs,
     });
@@ -1964,10 +2742,15 @@
     const want = normalizeStakeTen(stake);
     const meta = readLineBetMeta(line);
     const wantCommitted = expectedLineCommittedAmount(stake, meta.betCount);
+    const input = stakeInputFromLine(line);
+    if (input && readStakeFromLine(line) === want && !isLineStakeReactCommitted(line, stake)) {
+      await commitLineStakeByFocusBlur(line);
+      await sleep(stakePostTypeMs());
+    }
 
-    const ok = await pollUntil(() => (isLineStakeCommitted(line, stake) ? true : null), {
+    const ok = await pollUntil(() => (isLineStakeReactCommitted(line, stake) ? true : null), {
       interval: stakeFillPollMs(),
-      maxMs: 3600,
+      maxMs: isCrossAlupPage() ? 5500 : 3600,
     });
     if (ok) return;
 
@@ -1986,58 +2769,112 @@
     return assertStakeCommitted(line, stake);
   }
 
-  async function verifyBetSlipStakeDelta(totalBefore, expectedDelta) {
+  async function verifyBetSlipStakeDelta(slipBaseline, expectedDelta) {
+    const b = normalizeSlipBaseline(slipBaseline);
     const want = normalizeStakeTen(expectedDelta);
     if (want <= 0) return;
 
+    let passedVia = null;
     const ok = await pollUntil(() => {
+      const lineSum = sumSlipLineInputStakes();
+      const lineDelta = lineSum - b.lineInputSum;
+      if (lineDelta === want) {
+        passedVia = "lines";
+        return true;
+      }
       const now = readBetSlipGrandTotal();
-      if (now == null) return null;
-      if (totalBefore == null) return now === want ? true : null;
-      return now - totalBefore === want ? true : null;
-    }, { interval: pollMs(), maxMs: 3500 });
+      if (now != null && b.grandTotal != null && now - b.grandTotal === want) {
+        passedVia = "grand";
+        return true;
+      }
+      if (now != null && b.grandTotal == null && b.lineInputSum === 0 && lineDelta === want) {
+        passedVia = "lines";
+        return true;
+      }
+      return null;
+    }, { interval: pollMs(), maxMs: isCrossAlupPage() ? 6500 : 3500 });
 
-    if (ok) return;
+    if (ok) {
+      if (passedVia === "lines") {
+        const grand = readBetSlipGrandTotal();
+        const wantGrand = (b.grandTotal ?? 0) + want;
+        if (grand != null && grand !== wantGrand) {
+          syncDebug(
+            "行内合计 OK，總投注金額未同步",
+            `lines=$${sumSlipLineInputStakes()} 總投注=$${grand} 期望=$${wantGrand}`
+          );
+        }
+      }
+      return;
+    }
 
     const now = readBetSlipGrandTotal();
+    const lineSum = sumSlipLineInputStakes();
+    syncDebug(
+      "總投注金額校验失败",
+      `wantΔ=$${want} before=$${b.grandTotal ?? "?"} now=$${now ?? "?"} actualΔ=$${now != null && b.grandTotal != null ? now - b.grandTotal : "?"} lineSum=$${lineSum} lineΔ=$${lineSum - b.lineInputSum}`
+    );
     const err = new Error("HKJC_STAKE_TOTAL_MISMATCH");
     err.code = "HKJC_STAKE_TOTAL_MISMATCH";
     err.want = want;
-    err.got = now != null && totalBefore != null ? now - totalBefore : now;
+    err.got = now != null && b.grandTotal != null ? now - b.grandTotal : lineSum - b.lineInputSum;
     throw err;
   }
 
-  async function verifySyncStakeTotals(slipTotalBefore, items) {
+  async function verifySyncStakeTotals(slipBaseline, items) {
     const expectedDelta = sumItemsStake(items);
     if (expectedDelta <= 0) return;
-    await verifyBetSlipStakeDelta(slipTotalBefore, expectedDelta);
+    await commitAllSlipLineStakesViaFocusBlur();
+    const b = normalizeSlipBaseline(slipBaseline);
+    const wantGrand = (b.grandTotal ?? 0) + expectedDelta;
+    const grandOk = await pollUntil(() => {
+      const grand = readBetSlipGrandTotal();
+      const committed = sumSlipLineCommittedStakes();
+      if (grand === wantGrand) return true;
+      if (committed === wantGrand && committed > 0) return true;
+      return null;
+    }, { interval: pollMs(), maxMs: isCrossAlupPage() ? 9000 : 5500 });
+    if (!grandOk) {
+      syncDebug(
+        "總投注入账未完成",
+        `grand=$${readBetSlipGrandTotal() ?? "?"} committed=$${sumSlipLineCommittedStakes() || "?"} want=$${wantGrand}`
+      );
+    } else {
+      syncDebug("總投注金額入账 ✓", `$${readBetSlipGrandTotal() ?? sumSlipLineCommittedStakes()}`);
+    }
+    await verifyBetSlipStakeDelta(slipBaseline, expectedDelta);
   }
 
   /** P5：供 popup 確認閘門讀取馬會「總投注金額」快照 */
-  function buildStakeVerifySnapshot(expectedDelta, slipTotalBefore) {
+  function buildStakeVerifySnapshot(expectedDelta, slipBaseline) {
+    const b = normalizeSlipBaseline(slipBaseline);
     const want = normalizeStakeTen(expectedDelta);
     const grand = readBetSlipGrandTotal();
-    const before =
-      slipTotalBefore != null && Number.isFinite(Number(slipTotalBefore))
-        ? normalizeStakeTen(slipTotalBefore)
-        : null;
-    let actualDelta = null;
-    if (grand != null && before != null) actualDelta = grand - before;
-    else if (grand != null && before == null) actualDelta = grand;
-    const ok = want > 0 && actualDelta === want;
+    const lineSum = sumSlipLineInputStakes();
+    const lineDelta = lineSum - b.lineInputSum;
+    let grandDelta = null;
+    if (grand != null && b.grandTotal != null) grandDelta = grand - b.grandTotal;
+    else if (grand != null && b.grandTotal == null && b.lineInputSum === 0) grandDelta = grand;
+    const ok = want > 0 && (lineDelta === want || grandDelta === want);
     return {
       ok,
       expectedDelta: want,
-      actualDelta,
+      actualDelta: grandDelta ?? lineDelta,
+      lineSumDelta: lineDelta,
       grandTotal: grand,
-      slipTotalBefore: before,
+      lineInputSum: lineSum,
+      slipTotalBefore: b.grandTotal,
     };
   }
 
   async function verifyHkjcSlipStake(payload) {
     const expectedDelta = normalizeStakeTen(payload?.expectedDelta);
-    const slipTotalBefore =
-      payload?.slipTotalBefore != null ? normalizeStakeTen(payload.slipTotalBefore) : null;
+    const slipBaseline = normalizeSlipBaseline(
+      payload?.slipBaseline ??
+        (payload?.slipTotalBefore != null
+          ? { grandTotal: payload.slipTotalBefore, lineInputSum: 0, lineCount: 0 }
+          : captureSlipBaseline())
+    );
     if (expectedDelta <= 0) {
       return { ok: false, error: "INVALID_EXPECTED_DELTA" };
     }
@@ -2046,12 +2883,12 @@
     }
     const polled = await pollUntil(
       () => {
-        const snap = buildStakeVerifySnapshot(expectedDelta, slipTotalBefore);
+        const snap = buildStakeVerifySnapshot(expectedDelta, slipBaseline);
         return snap.ok ? snap : null;
       },
       { interval: stakeFillPollMs(), maxMs: 2800 }
     );
-    const snap = polled || buildStakeVerifySnapshot(expectedDelta, slipTotalBefore);
+    const snap = polled || buildStakeVerifySnapshot(expectedDelta, slipBaseline);
     return { ok: Boolean(snap.ok), ...snap };
   }
 
@@ -2145,7 +2982,16 @@
       slipAnchor != null && Number.isFinite(slipAnchor)
         ? getBetLines().slice(slipAnchor)
         : getBetLines();
-    return pool.find(entry.matcher) || findNewestBetLine(entry.matcher) || null;
+    const matched = pool.filter(entry.matcher);
+    if (matched.length) {
+      const stake = entry.stake;
+      if (stake != null) {
+        const committed = matched.filter((l) => isLineStakeCommitted(l, stake));
+        if (committed.length) return committed[committed.length - 1];
+      }
+      return matched[matched.length - 1];
+    }
+    return findNewestBetLine(entry.matcher) || null;
   }
 
   /**
@@ -2158,6 +3004,7 @@
     for (const ent of list) {
       const line = resolveStakeFillLine(ent, slipAnchor);
       if (!line) throw new Error("NO_BET_LINE_MATCH");
+      if (isLineStakeCommitted(line, ent.stake)) continue;
       await fillStakeOnLine(line, ent.stake);
       await assertStakeCommitted(line, ent.stake);
     }
@@ -2174,57 +3021,35 @@
     }
   }
 
-  /** P2 階段一：僅加入投注區，不填金額 */
-  async function appendPairToSlipOnly(matcher, slipBefore) {
-    const before = Number.isFinite(slipBefore) ? slipBefore : getBetLines().length;
-
-    let line = await pollUntil(() => findAddedBetLine(matcher, before), {
-      interval: pollMs(),
-      maxMs: 450,
-    });
-
-    const slice = () => getBetLines().slice(before);
-    if (!line && slice().length) {
-      line = slice().find(matcher) || slice()[slice().length - 1];
-    }
-
-    if (!line) {
+  /** P2：勾選後 → 填計算機 → 加入投注區（人手 ④⑤） */
+  async function appendPairToSlipOnly(matcher, slipBefore, stake) {
+    if (stake == null) {
+      const before = Number.isFinite(slipBefore) ? slipBefore : getBetLines().length;
       await clickAddToSlip();
-      line = await pollUntil(() => findAddedBetLine(matcher, before), {
+      let line = await pollUntil(() => findAddedBetLine(matcher, before), {
         interval: pollMs(),
         maxMs: isCrossAlupPage() ? 2600 : 2000,
       });
+      if (!line) line = findNewestBetLine(matcher);
+      if (!line) throw new Error("NO_BET_LINE_MATCH");
+      return line;
     }
-
-    if (!line) {
-      const added = slice();
-      line = added.find(matcher) || added[added.length - 1] || findNewestBetLine(matcher);
-    }
-    if (!line) throw new Error("NO_BET_LINE_MATCH");
-    return line;
+    return commitSelectionViaCalculator(stake, slipBefore, matcher);
   }
 
-  async function completePairSlipStake(matcher, stake, slipBefore, deferFill) {
-    const line = await appendPairToSlipOnly(matcher, slipBefore);
+  async function completePairSlipStake(matcher, stake, slipBefore) {
     const want = normalizeStakeTen(stake);
-    if (deferFill) return { added: 1, fillEntry: stakeFillEntry(line, want, matcher) };
-    await fillStakeOnLine(line, want);
-    await assertStakeCommitted(line, want);
+    await commitSelectionViaCalculator(want, slipBefore, matcher);
     return { added: 1 };
   }
 
-  function pairSlipResult(r) {
-    if (r?.fillEntry) return { added: 1, fillEntry: r.fillEntry };
+  function pairSlipResult() {
     return { added: 1 };
   }
 
-  /** 位置Q/連贏：加入投注區並填十位金額（放寬注單行匹配，填寫後校驗一次） */
+  /** 位置Q/連贏：填計算機 → 加入投注區 → 校驗 */
   async function appendPairToSlipAndFill(matcher, stake, slipBefore) {
-    const line = await appendPairToSlipOnly(matcher, slipBefore);
-    const want = normalizeStakeTen(stake);
-    await fillStakeOnLine(line, want);
-    await assertStakeCommitted(line, want);
-    return line;
+    return commitSelectionViaCalculator(stake, slipBefore, matcher);
   }
 
   async function requireWpqPairSelected(raceNo, h1, h2, pool, waitOpts) {
@@ -2271,45 +3096,14 @@
     }
 
     const slipBefore = getBetLines().length;
-    let line = await pollUntil(
-      () => {
-        const added = getBetLines().slice(slipBefore);
-        return added.find(isQinBankerBetLine) || null;
-      },
-      { interval: pollMs(), maxMs: 900 }
-    );
-
-    if (!line) {
-      await clickAddToSlip();
-      line = await pollUntil(
-        () => {
-          const added = getBetLines().slice(slipBefore);
-          const bankerLine = added.find(isQinBankerBetLine);
-          if (bankerLine) return bankerLine;
-          if (added.length === 1 && isQinBetLine(added[0])) return added[0];
-          return null;
-        },
-        { interval: pollMs(), maxMs: isCrossAlupPage() ? 3200 : 2800 }
-      );
-    }
-
-    if (!line) throw new Error("NO_BET_LINE_MATCH:banker");
-    if (isQinBoxBetLine(line)) {
-      throw new Error("HKJC_BANKER_LINE_MISMATCH:box");
-    }
-
     const stake = resolveBankerBatchStake(items);
     if (stake == null) throw new Error("HKJC_BANKER_DUTCH_UNEQUAL");
     const bankerMatcher = (l) =>
       isQinBankerBetLine(l) && betLineMatchesBankerDrag(l, banker, legs);
-    if (opts.deferFill) {
-      return {
-        added: items.length,
-        fillEntry: stakeFillEntry(line, stake, bankerMatcher),
-      };
+    const line = await commitSelectionViaCalculator(stake, slipBefore, bankerMatcher);
+    if (isQinBoxBetLine(line)) {
+      throw new Error("HKJC_BANKER_LINE_MISMATCH:box");
     }
-    await fillStakeOnLine(line, stake);
-    await assertStakeCommitted(line, stake);
     return { added: items.length };
   }
 
@@ -2348,46 +3142,15 @@
     }
 
     const slipBefore = getBetLines().length;
-    let line = await pollUntil(
-      () => {
-        const added = getBetLines().slice(slipBefore);
-        return added.find(isQplBankerBetLine) || null;
-      },
-      { interval: pollMs(), maxMs: 900 }
-    );
-
-    if (!line) {
-      await clickAddToSlip();
-      line = await pollUntil(
-        () => {
-          const added = getBetLines().slice(slipBefore);
-          const bankerLine = added.find(isQplBankerBetLine);
-          if (bankerLine) return bankerLine;
-          if (added.length === 1 && isQplBetLine(added[0])) return added[0];
-          return null;
-        },
-        { interval: pollMs(), maxMs: isCrossAlupPage() ? 3200 : 2800 }
-      );
-    }
-
-    if (!line) throw new Error("NO_BET_LINE_MATCH:qpl-banker");
-    if (isQplBoxBetLine(line)) {
-      throw new Error("HKJC_BANKER_LINE_MISMATCH:qpl-box");
-    }
-    assertBetLineIsQpl(line);
-
     const stake = resolveBankerBatchStake(items);
     if (stake == null) throw new Error("HKJC_BANKER_DUTCH_UNEQUAL");
     const bankerMatcher = (l) =>
       isQplBankerBetLine(l) && betLineMatchesBankerDrag(l, banker, legs);
-    if (opts.deferFill) {
-      return {
-        added: items.length,
-        fillEntry: stakeFillEntry(line, stake, bankerMatcher),
-      };
+    const line = await commitSelectionViaCalculator(stake, slipBefore, bankerMatcher);
+    if (isQplBoxBetLine(line)) {
+      throw new Error("HKJC_BANKER_LINE_MISMATCH:qpl-box");
     }
-    await fillStakeOnLine(line, stake);
-    await assertStakeCommitted(line, stake);
+    assertBetLineIsQpl(line);
     return { added: items.length };
   }
 
@@ -2453,64 +3216,127 @@
     return null;
   }
 
-  /**
-   * P1 填額慢路徑：僅用逐字輸入 + 行小計驗收，不用 paste；與導航 poll 節奏隔離。
-   */
+  async function ensureBetLineExpanded(line) {
+    if (!line?.classList?.contains("bet-line-collapse")) return;
+    const input = stakeInputFromLine(line);
+    if (input && isUiVisible(input)) return;
+    const title = line.querySelector(".title");
+    if (title) {
+      await clickElementInMainWorld(title);
+      await sleep(isCrossAlupPage() ? 90 : 65);
+    }
+  }
+
+  /** P1 填額：MAIN world 写入 + 人手式 focus+blur 入账。 */
   async function fillStakeOnLine(line, stake) {
     if (!line) throw new Error("NO_BET_LINE");
     const want = normalizeStakeTen(stake);
     const stakeStr = String(want);
-    if (isLineStakeCommitted(line, stake)) return;
+    if (isLineStakeReactCommitted(line, stake)) return;
 
+    await ensureBetLineExpanded(line);
     const input = await prepareStakeInputForFill(line);
-    if (isLineStakeCommitted(line, stake)) return;
+    if (isLineStakeReactCommitted(line, stake)) return;
 
     for (let attempt = 0; attempt < 6; attempt++) {
-      if (isLineStakeCommitted(line, stake)) return;
-      await typeStakeIntoInput(input, stakeStr, { stakeFill: true });
+      if (isLineStakeReactCommitted(line, stake)) return;
+      await insertTextValueInMainWorld(input, stakeStr);
+      await commitLineStakeByFocusBlur(line);
+      if (await pollLineStakeCommitted(line, stake, 2000)) return;
+      await typeInputValueInMainWorld(input, stakeStr);
+      await commitLineStakeByFocusBlur(line);
       if (await pollLineStakeCommitted(line, stake, 1600)) return;
+      await typeStakeIntoInput(input, stakeStr, { stakeFill: true });
+      await commitLineStakeByFocusBlur(line);
+      if (await pollLineStakeCommitted(line, stake, 2000)) return;
       await sleep(stakeRetryGapMs(attempt));
     }
     await assertStakeCommitted(line, stake);
   }
 
-  /**
-   * 勾選後馬會有時會自動加一行（預設 $10）；僅在注單未增加時才點「加入投注區」。
-   * 填寫時只改本次新增的那一行，避免舊的 5+7 $10 殘留。
-   */
-  function findAddedBetLine(matcher, linesBefore) {
+  /** 在 slipBefore 之後新增的注單行中，按 matcher 找本次添加的那一行（取最後一條匹配，避開勾選自動加行） */
+  function findAddedBetLine(matcher, linesBefore, opts = {}) {
     const added = getBetLines().slice(linesBefore);
     if (!added.length) return null;
-    return added.find(matcher) || added[added.length - 1];
+    const matched = added.filter(matcher);
+    if (!matched.length) return added[added.length - 1];
+    const preferStake = opts.preferStake;
+    if (preferStake != null) {
+      const committed = matched.filter((l) => isLineStakeCommitted(l, preferStake));
+      if (committed.length) return committed[committed.length - 1];
+    }
+    return matched[matched.length - 1];
   }
 
-  /** P2 階段一：勾選後僅加入投注區，不填金額 */
-  async function addSelectionToSlipOnly(matcher, linesBefore) {
+  function findRemoveBetLineButton(line) {
+    if (!line) return null;
+    return (
+      line.querySelector('[aria-label="移除注項"]') ||
+      line.querySelector(".switch-btn-icon.open-btn-icon") ||
+      line.querySelector(".open-btn-icon") ||
+      [...line.querySelectorAll("[role='button'], button, a, div")].find((el) =>
+        /移除|刪除|删除|remove/i.test(el.getAttribute?.("aria-label") || el.textContent || "")
+      )
+    );
+  }
+
+  async function clickRemoveBetLine(line) {
+    const btn = findRemoveBetLineButton(line);
+    if (btn) {
+      firePointerClick(btn);
+      await sleep(isCrossAlupPage() ? 100 : 75);
+      if (!line.isConnected || !document.contains(line)) return true;
+    }
+    const alt =
+      line.querySelector(".title [role='button']") ||
+      line.querySelector(".title .switch-btn-icon") ||
+      line.querySelector(".bet-line-close");
+    if (alt) {
+      firePointerClick(alt);
+      await sleep(isCrossAlupPage() ? 100 : 75);
+    }
+    return !line.isConnected || !document.contains(line);
+  }
+
+  /** 勾選後馬會有時自動加一行（預設 $10）；僅移除尚未正確入單的預加行 */
+  async function discardPrematureSlipLines(slipBefore, matcher, stake) {
+    const isBadPremature = (line) => stake == null || !isLineStakeCommitted(line, stake);
+    for (let round = 0; round < 5; round++) {
+      const premature = getBetLines().slice(slipBefore).filter(matcher).filter(isBadPremature);
+      if (!premature.length) return;
+      syncDebug(`移除勾选自动预加行 ×${premature.length}`);
+      for (const line of premature) {
+        await clickRemoveBetLine(line);
+      }
+      await sleep(isCrossAlupPage() ? 100 : 75);
+    }
+    const left = getBetLines().slice(slipBefore).filter(matcher).filter(isBadPremature);
+    if (left.length) {
+      const err = new Error("HKJC_PREMATURE_SLIP_LINE");
+      err.code = "HKJC_PREMATURE_SLIP_LINE";
+      throw err;
+    }
+  }
+
+  /** 勾選後 → 填計算機 → 加入投注區 */
+  async function addSelectionToSlipOnly(matcher, linesBefore, stake) {
     if (!document.querySelector("#betslip-panel")) throw new Error("NO_BETSLIP_PANEL");
-
+    if (stake != null) {
+      return commitSelectionViaCalculator(stake, linesBefore, matcher);
+    }
     const before = Number.isFinite(linesBefore) ? linesBefore : getBetLines().length;
-
+    await clickAddToSlip();
     let line = await pollUntil(() => findAddedBetLine(matcher, before), {
       interval: pollMs(),
-      maxMs: 400,
+      maxMs: isCrossAlupPage() ? 2800 : 2200,
     });
-
-    if (!line) {
-      await clickAddToSlip();
-      line = await pollUntil(() => findAddedBetLine(matcher, before), {
-        interval: pollMs(),
-        maxMs: isCrossAlupPage() ? 2800 : 2200,
-      });
-    }
     if (!line) line = findNewestBetLine(matcher);
     if (!line) throw new Error("NO_BET_LINE_MATCH");
     return line;
   }
 
   async function addSelectionToSlipAndFill(matcher, stake, linesBefore) {
-    const line = await addSelectionToSlipOnly(matcher, linesBefore);
-    await fillStakeOnLine(line, stake);
-    await assertStakeCommitted(line, stake);
+    return commitSelectionViaCalculator(stake, linesBefore, matcher);
   }
 
   function betLineMatchesHorse(line, horseNo) {
@@ -2561,8 +3387,13 @@
   async function clickAddToSlip() {
     const addBtn = findAddToSlipButton();
     if (!addBtn) throw new Error("MISSING_ADD_TO_SLIP");
-    addBtn.click();
-    await sleep(isCrossAlupPage() ? 55 : 32);
+    try {
+      addBtn.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    await clickElementInMainWorld(addBtn);
+    await sleep(isCrossAlupPage() ? 120 : 75);
   }
 
   async function waitWinSelectionCount(raceNo, minCount) {
@@ -2585,7 +3416,7 @@
     return lines || getBetLines().slice(slipBefore);
   }
 
-  /** 獨贏：半自動同步預設逐條勾選並點「加入投注區」（alwaysAdd 不因投注區已有而跳過） */
+  /** 獨贏：每注均走 ③勾選 → ④填計算機 → ⑤添加 */
   async function addWinHorsesBatch(raceNo, items, venueCode, opts = {}) {
     const slipOpts = opts.alwaysAdd === false ? {} : { alwaysAdd: true };
     const { toAdd, toUpdate, skipped } = partitionWinItemsForSync(items, slipOpts);
@@ -2594,29 +3425,50 @@
 
     await ensureWinPoolTab({ soft: true });
 
-    /** P2：階段一逐匹加入投注區 → 階段二統一慢填額 */
-    const slipAnchor = getBetLines().length;
-    const pendingFills = [];
+    const itemErrors = [];
     let added = 0;
-    for (const it of toAdd) {
+
+    const addOneWin = async (it) => {
       const horse = String(it.combo ?? "").trim();
+      const stake = it.stakePerLine;
       const matcher = (l) => betLineMatchesHorse(l, horse);
-      await uncheckWinExcept(raceNo, []);
+      syncDebug(`── 独赢 马 ${horse} 每注 $${normalizeStakeTen(stake)} ──`);
       await uncheckPlaExcept(raceNo, []);
+      await uncheckWinSelectionNotInSlip(raceNo, stake, horse);
       const cb = findWinCheckbox(raceNo, horse, venueCode);
       if (!cb) throw new Error(`MISSING_WIN_CHECKBOX:wpleg_WIN_${raceNo}_${horse}`);
       const slipBefore = getBetLines().length;
+      syncDebug(`勾选 ${elSyncId(cb)}`);
       await setCheckboxChecked(cb, true, 14);
       if (!(await waitSelectionReady("win", raceNo))) {
         throw new Error("HKJC_INSUFFICIENT_SELECTION:win");
       }
-      const line = await addSelectionToSlipOnly(matcher, slipBefore);
-      pendingFills.push(stakeFillEntry(line, it.stakePerLine, matcher));
-      await uncheckWinExcept(raceNo, []);
-      added += 1;
+      if (!(await waitInvestmentCalculatorReady(1))) {
+        throw new Error("HKJC_CALC_NOT_READY");
+      }
+      await commitSelectionViaCalculator(stake, slipBefore, matcher);
+      syncDebug(`等待马会取消勾选 ${elSyncId(cb)}`);
+      await waitWinHorseCheckboxReleased(raceNo, horse, venueCode);
+      syncDebug(`✓ 独赢 ${horse} 完成`);
+    };
+
+    for (const it of toAdd) {
+      try {
+        await addOneWin(it);
+        added += 1;
+      } catch (e) {
+        syncDebugErr(`独赢 ${it.combo} 失败`, e);
+        itemErrors.push({
+          combo: String(it.combo ?? "").trim(),
+          type: "獨贏",
+          error: String(e?.code || e?.message || e),
+        });
+        await uncheckWinSelectionNotInSlip(raceNo, it.stakePerLine);
+        await uncheckPlaExcept(raceNo, []);
+      }
     }
-    await fillStakeEntriesPhase2(pendingFills, slipAnchor);
-    return { added, skipped, updated: toUpdate.length };
+
+    return { added, skipped, updated: toUpdate.length, errors: itemErrors.length ? itemErrors : undefined };
   }
 
   async function addWinHorseSequential(raceNo, horseNo, stake, venueCode) {
@@ -2633,7 +3485,7 @@
     return Boolean(ok);
   }
 
-  /** 位置：與獨贏同頁（wp），勾選 wpleg_PLA_* */
+  /** 位置：每注均走 ③勾選 → ④填計算機 → ⑤添加 */
   async function addPlaHorsesBatch(raceNo, items, venueCode, opts = {}) {
     const slipOpts = opts.alwaysAdd === false ? {} : { alwaysAdd: true };
     const { toAdd, toUpdate, skipped } = partitionPlaItemsForSync(items, slipOpts);
@@ -2642,28 +3494,44 @@
 
     await ensureWinPoolTab({ soft: true });
 
-    const slipAnchor = getBetLines().length;
-    const pendingFills = [];
+    const itemErrors = [];
     let added = 0;
+
     for (const it of toAdd) {
       const horse = String(it.combo ?? "").trim();
+      const stake = it.stakePerLine;
       const matcher = (l) => isPlaBetLine(l) && betLineMatchesHorse(l, horse);
-      await uncheckWinExcept(raceNo, []);
-      await uncheckPlaExcept(raceNo, []);
-      const cb = findPlaCheckbox(raceNo, horse, venueCode);
-      if (!cb) throw new Error(`MISSING_PLA_CHECKBOX:wpleg_PLA_${raceNo}_${horse}`);
-      const slipBefore = getBetLines().length;
-      await setCheckboxChecked(cb, true, 14);
-      if (!(await waitSelectionReady("pla", raceNo))) {
-        throw new Error("HKJC_INSUFFICIENT_SELECTION:pla");
+      try {
+        syncDebug(`── 位置 马 ${horse} 每注 $${normalizeStakeTen(stake)} ──`);
+        await uncheckWinExcept(raceNo, []);
+        await uncheckPlaSelectionNotInSlip(raceNo, stake, horse);
+        const cb = findPlaCheckbox(raceNo, horse, venueCode);
+        if (!cb) throw new Error(`MISSING_PLA_CHECKBOX:wpleg_PLA_${raceNo}_${horse}`);
+        const slipBefore = getBetLines().length;
+        syncDebug(`勾选 ${elSyncId(cb)}`);
+        await setCheckboxChecked(cb, true, 14);
+        if (!(await waitSelectionReady("pla", raceNo))) {
+          throw new Error("HKJC_INSUFFICIENT_SELECTION:pla");
+        }
+        if (!(await waitInvestmentCalculatorReady(1))) {
+          throw new Error("HKJC_CALC_NOT_READY");
+        }
+        await commitSelectionViaCalculator(stake, slipBefore, matcher);
+        await waitPlaHorseCheckboxReleased(raceNo, horse, venueCode);
+        syncDebug(`✓ 位置 ${horse} 完成`);
+        added += 1;
+      } catch (e) {
+        syncDebugErr(`位置 ${horse} 失败`, e);
+        itemErrors.push({
+          combo: horse,
+          type: "位置",
+          error: String(e?.code || e?.message || e),
+        });
+        await uncheckWinExcept(raceNo, []);
+        await uncheckPlaSelectionNotInSlip(raceNo, stake);
       }
-      const line = await addSelectionToSlipOnly(matcher, slipBefore);
-      pendingFills.push(stakeFillEntry(line, it.stakePerLine, matcher));
-      await uncheckPlaExcept(raceNo, []);
-      added += 1;
     }
-    await fillStakeEntriesPhase2(pendingFills, slipAnchor);
-    return { added, skipped, updated: toUpdate.length };
+    return { added, skipped, updated: toUpdate.length, errors: itemErrors.length ? itemErrors : undefined };
   }
 
   async function addPlaHorseSequential(raceNo, horseNo, stake, venueCode) {
@@ -2883,7 +3751,7 @@
 
     const errors = [];
     let added = 0;
-    const slipTotalBefore = readBetSlipGrandTotal();
+    const slipBaseline = captureSlipBaseline();
     const slipAnchor = getBetLines().length;
     const fillQueue = [];
     const slipOpts = { alwaysAdd: true };
@@ -2994,7 +3862,7 @@
       try {
         await verifySyncStakeTotalsIfNeeded(
           payload,
-          slipTotalBefore,
+          slipBaseline,
           [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal],
           qinFinal,
           qplFinal
@@ -3020,7 +3888,7 @@
       stakeVerify: buildStakeVerifyForSync(
         payload,
         syncedItems,
-        slipTotalBefore,
+        slipBaseline,
         qinFinal,
         qplFinal
       ),
@@ -3133,12 +4001,10 @@
         skipInitialClear: opts.skipInitialClear,
       });
       if (!sel.ok) throw new Error(sel.code || "HKJC_INSUFFICIENT_SELECTION:qin");
-      const boxR = await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill);
-      if (!opts.deferFill) {
-        await uncheckQinTableForRace(raceNo, "QIN", opts);
-        await uncheckAllWpqBankers(raceNo, "QIN");
-      }
-      return pairSlipResult(boxR);
+      await completePairSlipStake(matcher, stake, slipBefore);
+      await uncheckQinTableForRace(raceNo, "QIN", opts);
+      await uncheckAllWpqBankers(raceNo, "QIN");
+      return pairSlipResult();
     }
 
     await clearWpqPairSelection(raceNo, h1, h2, "QIN", opts);
@@ -3149,9 +4015,8 @@
     if (await clickQbPairCell("QIN", h1, h2)) {
       await requireWpqPairSelected(r, h1, h2, "QIN", waitOpts);
       try {
-        return pairSlipResult(
-          await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill)
-        );
+        await completePairSlipStake(matcher, stake, slipBefore);
+        return pairSlipResult();
       } catch (e) {
         lastErr = e;
       }
@@ -3169,9 +4034,8 @@
     await requireWpqPairSelected(r, h1, h2, "QIN", waitOpts);
 
     try {
-      return pairSlipResult(
-        await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill)
-      );
+      await completePairSlipStake(matcher, stake, slipBefore);
+      return pairSlipResult();
     } catch (e) {
       if (lastErr) throw lastErr;
       throw e;
@@ -3206,12 +4070,10 @@
         poolReady: opts.poolReady,
       });
       if (!sel.ok) throw new Error(sel.code || "HKJC_INSUFFICIENT_SELECTION:qpl");
-      const boxR = await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill);
-      if (!opts.deferFill) {
-        await uncheckQinTableForRace(raceNo, "QPL", opts);
-        await uncheckAllWpqBankers(raceNo, "QPL");
-      }
-      return pairSlipResult(boxR);
+      await completePairSlipStake(matcher, stake, slipBefore);
+      await uncheckQinTableForRace(raceNo, "QPL", opts);
+      await uncheckAllWpqBankers(raceNo, "QPL");
+      return pairSlipResult();
     }
 
     await clearWpqPairSelection(raceNo, h1, h2, "QPL", opts);
@@ -3222,9 +4084,8 @@
     if (await clickQbPairCell("QPL", h1, h2)) {
       await requireWpqPairSelected(r, h1, h2, "QPL", waitOpts);
       try {
-        return pairSlipResult(
-          await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill)
-        );
+        await completePairSlipStake(matcher, stake, slipBefore);
+        return pairSlipResult();
       } catch (e) {
         lastErr = e;
       }
@@ -3242,9 +4103,8 @@
     await requireWpqPairSelected(r, h1, h2, "QPL", waitOpts);
 
     try {
-      return pairSlipResult(
-        await completePairSlipStake(matcher, stake, slipBefore, opts.deferFill)
-      );
+      await completePairSlipStake(matcher, stake, slipBefore);
+      return pairSlipResult();
     } catch (e) {
       if (lastErr) throw lastErr;
       throw e;
@@ -3252,7 +4112,7 @@
   }
 
   /**
-   * 半自動：切到正確場次 → 勾選 → 點「加入投注區」→ 填金額（與人手一致，走馬會 React 狀態）。
+   * 半自動：切到正確場次 → 勾選 → 填投注計算機 → 點「添加到投注區」（與人手一致）。
    */
   async function applySlipViaUserClicks(
     payload,
@@ -3293,48 +4153,22 @@
     let skipped = 0;
     let updated = 0;
     const clickOpts = { alwaysAdd: true };
-    const slipTotalBefore = readBetSlipGrandTotal();
+    const slipBaseline = captureSlipBaseline();
 
     if (winFinal.length) {
-      try {
-        const wr = await addWinHorsesBatch(raceNo, winFinal, venueCode, clickOpts);
-        added += wr.added || 0;
-        skipped += wr.skipped || 0;
-        updated += wr.updated || 0;
-      } catch (batchErr) {
-        for (const it of winFinal) {
-          try {
-            const n = await addWinHorseSequential(raceNo, it.combo, it.stakePerLine, venueCode);
-            added += Number(n) || 0;
-          } catch (e) {
-            errors.push({ combo: it.combo, type: "獨贏", error: String(e?.message || e) });
-          }
-        }
-        if (!errors.filter((e) => e.type === "獨贏").length && added === 0 && skipped === 0) {
-          errors.push({ combo: "", type: "獨贏", error: String(batchErr?.message || batchErr) });
-        }
-      }
+      const wr = await addWinHorsesBatch(raceNo, winFinal, venueCode, clickOpts);
+      added += wr.added || 0;
+      skipped += wr.skipped || 0;
+      updated += wr.updated || 0;
+      if (Array.isArray(wr.errors)) errors.push(...wr.errors);
     }
 
     if (plaFinal.length) {
-      try {
-        const pr = await addPlaHorsesBatch(raceNo, plaFinal, venueCode, clickOpts);
-        added += pr.added || 0;
-        skipped += pr.skipped || 0;
-        updated += pr.updated || 0;
-      } catch (batchErr) {
-        for (const it of plaFinal) {
-          try {
-            const n = await addPlaHorseSequential(raceNo, it.combo, it.stakePerLine, venueCode);
-            added += Number(n) || 0;
-          } catch (e) {
-            errors.push({ combo: it.combo, type: "位置", error: String(e?.message || e) });
-          }
-        }
-        if (!errors.filter((e) => e.type === "位置").length && added === 0 && skipped === 0) {
-          errors.push({ combo: "", type: "位置", error: String(batchErr?.message || batchErr) });
-        }
-      }
+      const pr = await addPlaHorsesBatch(raceNo, plaFinal, venueCode, clickOpts);
+      added += pr.added || 0;
+      skipped += pr.skipped || 0;
+      updated += pr.updated || 0;
+      if (Array.isArray(pr.errors)) errors.push(...pr.errors);
     }
 
     if (qinFinal.length) {
@@ -3358,11 +4192,8 @@
         const { singles, batches } = partitionQinBankerBatches(toAdd);
         const { batches: syncBatches, extraSingles } = expandBankerBatchesForSync(batches);
         const qinSinglesList = [...singles, ...extraSingles];
-        const qinSlipAnchor = getBetLines().length;
-        const qinFillQueue = [];
         let bankerBetModeReady = syncPrep.qinBankerModeReady;
-        const deferFill = {
-          deferFill: true,
+        const batchOpts = {
           poolReady: true,
           raceSettled: true,
           betModeReady: bankerBetModeReady,
@@ -3373,12 +4204,11 @@
         for (const batch of syncBatches) {
           try {
             const qr = await addQinBankerDrag(raceNo, batch, {
-              ...deferFill,
+              ...batchOpts,
               betModeReady: bankerBetModeReady,
             });
             bankerBetModeReady = true;
             added += qr?.added || 0;
-            if (qr?.fillEntry) qinFillQueue.push(qr.fillEntry);
           } catch (e) {
             for (const it of batch.items) {
               errors.push({ combo: it.combo, type: "連贏", error: String(e?.message || e) });
@@ -3392,7 +4222,7 @@
           const it = qinSinglesList[qi];
           try {
             const pairOpts = {
-              ...deferFill,
+              ...batchOpts,
               /** 連贏「2-4」格式一律走複式腳欄勾選 */
               boxMode: true,
               skipInitialClear: qi > 0,
@@ -3400,19 +4230,9 @@
             };
             const qr = await addQinPair(raceNo, it.combo, it.stakePerLine, pairOpts);
             if (qr?.skipped) skipped += 1;
-            else {
-              added += qr?.added || 1;
-              if (qr?.fillEntry) qinFillQueue.push(qr.fillEntry);
-            }
+            else added += qr?.added || 1;
           } catch (e) {
             errors.push({ combo: it.combo, type: "連贏", error: String(e?.message || e) });
-          }
-        }
-        if (qinFillQueue.length) {
-          try {
-            await fillStakeEntriesPhase2(qinFillQueue, qinSlipAnchor);
-          } catch (e) {
-            errors.push({ combo: "", type: "連贏", error: String(e?.code || e?.message || e) });
           }
         }
         if (qinSinglesList.length || syncBatches.length) {
@@ -3443,18 +4263,15 @@
         const { singles, batches } = partitionQinBankerBatches(toAdd);
         const { batches: syncBatches, extraSingles } = expandBankerBatchesForSync(batches);
         const qplSinglesList = [...singles, ...extraSingles];
-        const qplSlipAnchor = getBetLines().length;
-        const qplFillQueue = [];
-        const deferFill = { deferFill: true, poolReady: true, raceSettled: true };
+        const qplBatchOpts = { poolReady: true, raceSettled: true };
         if (qplSinglesList.length) {
           const switchedBox = await ensureWpqBoxBetMode();
           if (switchedBox) await sleep(100);
         }
         for (const batch of syncBatches) {
           try {
-            const qr = await addQplBankerDrag(raceNo, batch, deferFill);
+            const qr = await addQplBankerDrag(raceNo, batch, qplBatchOpts);
             added += qr?.added || 0;
-            if (qr?.fillEntry) qplFillQueue.push(qr.fillEntry);
           } catch (e) {
             for (const it of batch.items) {
               errors.push({ combo: it.combo, type: "位置Q", error: String(e?.message || e) });
@@ -3469,25 +4286,15 @@
           const it = qplSinglesList[qi];
           try {
             const pairOpts = {
-              ...deferFill,
+              ...qplBatchOpts,
               boxMode: true,
               skipInitialClear: qi > 0,
             };
             const qr = await addQplPair(raceNo, it.combo, it.stakePerLine, pairOpts);
             if (qr?.skipped) skipped += 1;
-            else {
-              added += qr?.added || 1;
-              if (qr?.fillEntry) qplFillQueue.push(qr.fillEntry);
-            }
+            else added += qr?.added || 1;
           } catch (e) {
             errors.push({ combo: it.combo, type: "位置Q", error: String(e?.message || e) });
-          }
-        }
-        if (qplFillQueue.length) {
-          try {
-            await fillStakeEntriesPhase2(qplFillQueue, qplSlipAnchor);
-          } catch (e) {
-            errors.push({ combo: "", type: "位置Q", error: String(e?.code || e?.message || e) });
           }
         }
         if (qplSinglesList.length || syncBatches.length) {
@@ -3501,7 +4308,7 @@
       try {
         await verifySyncStakeTotalsIfNeeded(
           payload,
-          slipTotalBefore,
+          slipBaseline,
           [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal],
           qinFinal,
           qplFinal
@@ -3517,7 +4324,10 @@
 
     const syncedItems = [...winFinal, ...plaFinal, ...qinFinal, ...qplFinal];
     const skipGrandTotalVerify = shouldSkipGrandTotalVerify(payload, qinFinal, qplFinal);
-    return {
+    syncDebug(
+      `同步结束 added=${added} skipped=${skipped} errors=${errors.length} 投注区=${getBetLines().length}行`
+    );
+    return withSyncTrace({
       ok: errors.length === 0,
       added,
       skipped,
@@ -3531,15 +4341,18 @@
       stakeVerify: buildStakeVerifyForSync(
         payload,
         syncedItems,
-        slipTotalBefore,
+        slipBaseline,
         qinFinal,
         qplFinal
       ),
       errors: errors.length ? errors : undefined,
-    };
+    });
   }
 
   async function applySlip(payload) {
+    setSyncDebug(payload?.syncDebug !== false);
+    if (syncDebugOn) syncTraceLog.length = 0;
+
     const raceNo = Number(payload?.raceNo);
     const targetUrl = String(payload?.url || "");
     const winItems = (Array.isArray(payload?.winItems) ? payload.winItems : []).filter((it) =>
@@ -3598,12 +4411,28 @@
 
     const venueCode = String(payload?.venueCode ?? parseHkjcRacePath(targetUrl)?.venue ?? "").trim();
 
+    syncDebug(`开始同步 v${SCRIPT_VERSION}`, {
+      race: raceNo,
+      venue: venueCode,
+      win: winFinal.length,
+      pla: plaFinal.length,
+      qin: qinFinal.length,
+      qpl: qplFinal.length,
+      url: targetUrl,
+    });
+
     if (payload.slipOnly === true) {
-      return applySlipDirectPanel(payload, winFinal, plaFinal, qinFinal, qplFinal, raceNo, venueCode);
+      return withSyncTrace(
+        await applySlipDirectPanel(payload, winFinal, plaFinal, qinFinal, qplFinal, raceNo, venueCode)
+      );
     }
 
+    /** 預設走官網 5 步點擊；僅 preferDirectPanel===true 時才嘗試 Direct Panel */
     const directEligible =
-      canUseDirectPanelSync(payload, raceNo, targetUrl) && !qinFinal.length && !qplFinal.length;
+      payload.preferDirectPanel === true &&
+      canUseDirectPanelSync(payload, raceNo, targetUrl) &&
+      !qinFinal.length &&
+      !qplFinal.length;
     if (directEligible) {
       try {
         const direct = await applySlipDirectPanel(
@@ -3639,7 +4468,7 @@
       venueCode,
       targetUrl
     );
-    if (clickRes.error === "PAGE_MISMATCH") return clickRes;
+    if (clickRes.error === "PAGE_MISMATCH") return withSyncTrace(clickRes);
     if (clickRes.added > 0 || clickRes.ok) return clickRes;
 
     if (
@@ -3664,6 +4493,6 @@
         /* 保留點擊路徑錯誤 */
       }
     }
-    return clickRes;
+    return withSyncTrace(clickRes);
   }
 })();

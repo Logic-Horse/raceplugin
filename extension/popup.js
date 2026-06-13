@@ -1134,6 +1134,15 @@
     }
   }
 
+  /** 默认开启；localStorage.setItem('raceplugin_sync_debug','0') 可关闭 */
+  function isHkjcSyncDebugEnabled() {
+    try {
+      return localStorage.getItem("raceplugin_sync_debug") !== "0";
+    } catch {
+      return true;
+    }
+  }
+
   function buildHkjcSyncPayload() {
     const { win, pla, qin, qpl, rest } = groupSlipItemsForBetApi();
     const url = buildHkjcWpUrl(hkjcMeeting, raceNo);
@@ -1191,13 +1200,17 @@
       dutchStakeMode: dutchStakeAppliesOnScreen(),
       /** 半自動：模擬勾選 +「加入投注區」+ 填金額（與人手操作一致） */
       slipOnly: false,
-      /** P4：優先 Direct Panel 注入（最快），失敗自動回退點擊路徑 */
-      preferDirectPanel: true,
-      syncMode: "direct-or-click",
-      /** 不自動跳轉馬會頁，避免「離開此網站？」清空未發送注項 */
+      /** 走官網 5 步點擊（venue → raceno → wp/wpq → 勾選 → 計算機 → 添加） */
+      preferDirectPanel: false,
+      syncMode: "click",
+      /** 同步時切換至馬會分頁，便於看見自動點擊 */
+      activateHkjcTab: true,
+      /** 同日以 DOM 點擊切換馬場／場次，避免整頁跳轉清空注項 */
       strictSamePage: true,
       allowDirectFallback: false,
       openHkjcIfMissing: true,
+      /** 默认 true：马会页 Console 输出 [raceplugin-sync] 逐步日志 */
+      syncDebug: isHkjcSyncDebugEnabled(),
     };
   }
 
@@ -1242,6 +1255,11 @@
       PAGE_MISMATCH: "馬會頁面與目前場次不一致",
       HKJC_BETTING_LOCKED: "馬會選馬框已鎖定（該場可能未開盤或已截止），請稍後或換場再試",
       HKJC_STAKE_FILL_FAILED: "注項已加入馬會投注區，但金額未能寫入（仍為 $10）；請刷新馬會頁後重試同步",
+      HKJC_CALC_STAKE_FILL_FAILED: "投注計算機未能寫入每注金額；請刷新馬會頁後重試同步",
+      HKJC_CALC_NOT_READY: "勾選後投注計算機未就緒（注數仍為空）；請刷新馬會頁後重試同步",
+      HKJC_CALC_TOTAL_NOT_READY:
+        "投注計算機「投注金額」總額未更新；每注金額填寫後請稍候再添加",
+      HKJC_PREMATURE_SLIP_LINE: "勾選後馬會自動加了預設注單且無法清除；請手動刪除投注區該行後重試",
       HKJC_STAKE_TOTAL_MISMATCH:
         "馬會投注區總金額與插件不一致；請勿發送注項，刷新馬會頁後重試同步",
     };
@@ -1692,6 +1710,13 @@
     }
     try {
       const res = await chrome.runtime.sendMessage({ type: "SYNC_TO_HKJC", payload });
+      if (isHkjcSyncDebugEnabled()) {
+        if (Array.isArray(res?.syncTrace) && res.syncTrace.length) {
+          console.log("[raceplugin-sync] 同步轨迹（popup）:", res.syncTrace);
+        } else {
+          console.log("[raceplugin-sync] 无 syncTrace；请确认已 reload 扩展并在马会页 Console 查看");
+        }
+      }
       const addedN = Number(res?.added) || 0;
       const errList = Array.isArray(res?.errors) ? res.errors : [];
       if (!res?.ok) {

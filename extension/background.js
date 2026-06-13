@@ -1,7 +1,7 @@
 /** 將 popup 的注單同步請求轉發至 bet.hkjc.com 分頁的 content script */
 const HKJC_ORIGIN = "https://bet.hkjc.com";
 /** 與 content-hkjc.js 的 SCRIPT_VERSION 保持一致；不符則強制重新注入 */
-const HKJC_CONTENT_SCRIPT_VERSION = 54;
+const HKJC_CONTENT_SCRIPT_VERSION = 72;
 const PANEL_PAGE = "popup.html";
 
 /** 類 MetaMask：點工具欄圖標打開 Chrome 右側邊欄，不遮擋馬會頁中央 */
@@ -77,6 +77,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === "VERIFY_HKJC_STAKE") {
     void handleVerifyHkjcStake(msg.payload)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+    return true;
+  }
+  if (msg?.type === "HKJC_MAIN_WORLD_OP") {
+    const tabId = _sender?.tab?.id;
+    if (!tabId) {
+      sendResponse({ ok: false, error: "NO_TAB" });
+      return false;
+    }
+    void executeMainWorldDomOp(tabId, msg.op)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
     return true;
@@ -173,7 +184,8 @@ async function waitForHkjcUrl(tabId, targetUrl, timeoutMs = 45000) {
 function urlsMatchSameDay(tabUrl, targetUrl) {
   const a = parseHkjcRacePath(tabUrl || "");
   const b = parseHkjcRacePath(targetUrl || "");
-  return Boolean(a && b && a.date === b.date);
+  if (!a?.date || !b?.date) return true;
+  return a.date === b.date;
 }
 
 /** 嚴格同頁：優先使用已與目標場次一致的 bet.hkjc.com 分頁，不自動改 URL */
@@ -225,13 +237,472 @@ async function clearHkjcContentFlags(tabId) {
         delete window.__racepluginHkjcOnMessage;
       },
     });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => {
+        delete window.__racepluginMainBridgeInstalled;
+      },
+    });
   } catch {
     /* 頁面尚未可腳本化時忽略 */
   }
 }
 
+function runRacepluginMainWorldDomOp(op) {
+  if (op?.type === "calc-add-sequence") {
+    const input = op.inputId ? document.getElementById(op.inputId) : null;
+    const addBtn = op.addId ? document.getElementById(op.addId) : null;
+    if (!input || !addBtn) return { ok: false, error: "NO_CALC_OR_ADD" };
+    try {
+      input.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    input.focus();
+    input.click();
+    try {
+      addBtn.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    addBtn.click();
+    return { ok: true };
+  }
+
+  if (op?.type === "focus-blur") {
+    const input = op.inputId ? document.getElementById(op.inputId) : null;
+    const outside = op.outsideId ? document.getElementById(op.outsideId) : null;
+    if (!input) return { ok: false, error: "NO_INPUT" };
+    try {
+      input.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    input.focus();
+    input.click();
+    if (outside) {
+      try {
+        outside.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch {
+        /* ignore */
+      }
+      outside.click();
+    } else {
+      input.blur();
+    }
+    return { ok: true };
+  }
+
+  const el = op?.tempId ? document.getElementById(op.tempId) : null;
+  if (!el) return { ok: false, error: "NO_ELEMENT" };
+
+  function resetTracker(input) {
+    const tracker = input?._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(String(input.value ?? ""));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function reactSetInput(input, value) {
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!desc?.set) return false;
+    resetTracker(input);
+    desc.set.call(input, String(value));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function reactTypeInput(input, value) {
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!desc?.set) return "";
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    try {
+      input.focus();
+      input.click();
+      input.select?.();
+    } catch {
+      /* ignore */
+    }
+    resetTracker(input);
+    desc.set.call(input, "");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    let acc = "";
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: code,
+          which: code,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      acc += ch;
+      resetTracker(input);
+      desc.set.call(input, acc);
+      try {
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            data: ch,
+            inputType: "insertText",
+          })
+        );
+      } catch {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      input.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: code,
+          which: code,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return String(input.value ?? "").replace(/[^\d]/g, "");
+  }
+
+  function reactCommitInput(input) {
+    try {
+      input.focus();
+    } catch {
+      /* ignore */
+    }
+    const base = { bubbles: true, cancelable: true };
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { ...base, key: "Enter", code: "Enter", keyCode: 13, which: 13 })
+    );
+    input.dispatchEvent(
+      new KeyboardEvent("keyup", { ...base, key: "Enter", code: "Enter", keyCode: 13, which: 13 })
+    );
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    try {
+      input.blur();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function reactInsertTextInput(input, value) {
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    try {
+      input.focus();
+      input.click();
+      input.select?.();
+    } catch {
+      /* ignore */
+    }
+    const tracker = input?._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(String(input.value ?? ""));
+      } catch {
+        /* ignore */
+      }
+    }
+    let inserted = false;
+    try {
+      inserted = document.execCommand("insertText", false, text);
+    } catch {
+      inserted = false;
+    }
+    if (!inserted) return reactTypeInput(input, text);
+    try {
+      input.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          data: text,
+          inputType: "insertText",
+        })
+      );
+    } catch {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return String(input.value ?? "").replace(/[^\d]/g, "");
+  }
+
+  function reactClick(target) {
+    try {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    try {
+      target.click();
+    } catch {
+      const base = { bubbles: true, cancelable: true, view: window };
+      target.dispatchEvent(new MouseEvent("click", base));
+    }
+  }
+
+  if (op.type === "set-input") {
+    reactSetInput(el, op.value);
+    return { ok: true, value: String(el.value ?? "") };
+  }
+  if (op.type === "type-input") {
+    const value = reactTypeInput(el, op.value);
+    return { ok: true, value };
+  }
+  if (op.type === "commit-input") {
+    reactCommitInput(el);
+    return { ok: true, value: String(el.value ?? "") };
+  }
+  if (op.type === "insert-text") {
+    const value = reactInsertTextInput(el, op.value);
+    return { ok: true, value };
+  }
+  if (op.type === "click") {
+    reactClick(el);
+    return { ok: true };
+  }
+  return { ok: false, error: "UNKNOWN_OP" };
+}
+
+async function executeMainWorldDomOp(tabId, op) {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: runRacepluginMainWorldDomOp,
+    args: [op],
+  });
+  return result?.result ?? { ok: false, error: "EMPTY_RESULT" };
+}
+
+function installRacepluginMainWorldBridge() {
+  if (window.__racepluginMainBridgeInstalled) return;
+  window.__racepluginMainBridgeInstalled = true;
+
+  function reactSetInput(el, value) {
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!desc?.set) return false;
+    const tracker = el._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(el.value);
+      } catch {
+        /* ignore */
+      }
+    }
+    desc.set.call(el, String(value));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function reactTypeInput(el, value) {
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!desc?.set) return "";
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    try {
+      el.focus();
+      el.click();
+      el.select?.();
+    } catch {
+      /* ignore */
+    }
+    const tracker = el._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(el.value);
+      } catch {
+        /* ignore */
+      }
+    }
+    desc.set.call(el, "");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    let acc = "";
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      el.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: code,
+          which: code,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      acc += ch;
+      if (tracker) {
+        try {
+          tracker.setValue(el.value);
+        } catch {
+          /* ignore */
+        }
+      }
+      desc.set.call(el, acc);
+      try {
+        el.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            data: ch,
+            inputType: "insertText",
+          })
+        );
+      } catch {
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      el.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: code,
+          which: code,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    }
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return String(el.value ?? "").replace(/[^\d]/g, "");
+  }
+
+  function reactCommitInput(el) {
+    try {
+      el.focus();
+    } catch {
+      /* ignore */
+    }
+    const base = { bubbles: true, cancelable: true };
+    el.dispatchEvent(
+      new KeyboardEvent("keydown", { ...base, key: "Enter", code: "Enter", keyCode: 13, which: 13 })
+    );
+    el.dispatchEvent(
+      new KeyboardEvent("keyup", { ...base, key: "Enter", code: "Enter", keyCode: 13, which: 13 })
+    );
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    try {
+      el.blur();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function reactInsertTextInput(el, value) {
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    try {
+      el.focus();
+      el.click();
+      el.select?.();
+    } catch {
+      /* ignore */
+    }
+    const tracker = el._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(String(el.value ?? ""));
+      } catch {
+        /* ignore */
+      }
+    }
+    let inserted = false;
+    try {
+      inserted = document.execCommand("insertText", false, text);
+    } catch {
+      inserted = false;
+    }
+    if (!inserted) return reactTypeInput(el, text);
+    try {
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          data: text,
+          inputType: "insertText",
+        })
+      );
+    } catch {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return String(el.value ?? "").replace(/[^\d]/g, "");
+  }
+
+  function reactClick(el) {
+    try {
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    try {
+      el.click();
+    } catch {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    }
+  }
+
+  document.addEventListener("raceplugin-main-set-input", (ev) => {
+    const { tempId, value, type } = ev.detail || {};
+    const el = tempId ? document.getElementById(tempId) : null;
+    if (!el) return;
+    if (type === "type-input") reactTypeInput(el, value);
+    else if (type === "insert-text") reactInsertTextInput(el, value);
+    else if (type === "commit-input") reactCommitInput(el);
+    else reactSetInput(el, value);
+  });
+
+  document.addEventListener("raceplugin-main-click", (ev) => {
+    const { tempId } = ev.detail || {};
+    const el = tempId ? document.getElementById(tempId) : null;
+    if (el) reactClick(el);
+  });
+
+  const MAIN_OP_ATTR = "data-raceplugin-main-op";
+  const handleMainOp = (raw) => {
+    if (!raw) return;
+    let op;
+    try {
+      op = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const el = op.tempId ? document.getElementById(op.tempId) : null;
+    if (!el) return;
+    if (op.type === "set-input") reactSetInput(el, op.value);
+    else if (op.type === "type-input") reactTypeInput(el, op.value);
+    else if (op.type === "commit-input") reactCommitInput(el);
+    else if (op.type === "insert-text") reactInsertTextInput(el, op.value);
+    else if (op.type === "click") reactClick(el);
+  };
+
+  new MutationObserver((records) => {
+    for (const r of records) {
+      if (r.type !== "attributes" || r.attributeName !== MAIN_OP_ATTR) continue;
+      const raw = document.documentElement.getAttribute(MAIN_OP_ATTR);
+      document.documentElement.removeAttribute(MAIN_OP_ATTR);
+      handleMainOp(raw);
+    }
+  }).observe(document.documentElement, { attributes: true, attributeFilter: [MAIN_OP_ATTR] });
+}
+
 async function injectHkjcContentScript(tabId) {
   await clearHkjcContentFlags(tabId);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: installRacepluginMainWorldBridge,
+    });
+  } catch {
+    /* 頁面尚未可腳本化時忽略 */
+  }
   await chrome.scripting.executeScript({
     target: { tabId },
     files: ["content-hkjc.js"],
@@ -342,9 +813,16 @@ async function handleSyncToHkjc(payload) {
     }
   }
 
-  /** 僅日期不同時拒絕；馬場／場次交由 content 點 #venue_* / #raceno_N（不清投注區） */
-  if (strictSamePage && !urlsMatchSameDay(tab.url, targetUrl)) {
-    return pageMismatchResponse(tab, targetUrl, payload);
+  /** 賽馬日不同時導向目標 URL，交由 content script 繼續切馬場／場次（不直接報 PAGE_MISMATCH） */
+  if (strictSamePage && !urlsMatchSameDay(tab.url, targetUrl) && tab?.id) {
+    try {
+      await chrome.tabs.update(tab.id, { url: targetUrl });
+      await waitForTabComplete(tab.id);
+      await waitForHkjcUrl(tab.id, targetUrl);
+      tab = await chrome.tabs.get(tab.id);
+    } catch {
+      return pageMismatchResponse(tab, targetUrl, payload);
+    }
   }
 
   if (activateTab && tab.id) {
