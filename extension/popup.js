@@ -1253,7 +1253,7 @@
       EMPTY_RESPONSE: "馬會頁面無回應，請刷新後重試",
       NO_HKJC_TAB: "請先打開馬會投注網站",
       PAGE_MISMATCH: "馬會頁面與目前場次不一致",
-      HKJC_BETTING_LOCKED: "馬會選馬框已鎖定（該場可能未開盤或已截止），請稍後或換場再試",
+      HKJC_BETTING_LOCKED: "馬會選馬框已鎖定（該場可能未開盤或已截止）；請刷新馬會頁、確認已登入，或手動點一匹马测试是否可勾选",
       HKJC_STAKE_FILL_FAILED: "注項已加入馬會投注區，但金額未能寫入（仍為 $10）；請刷新馬會頁後重試同步",
       HKJC_CALC_STAKE_FILL_FAILED: "投注計算機未能寫入每注金額；請刷新馬會頁後重試同步",
       HKJC_CALC_NOT_READY: "勾選後投注計算機未就緒（注數仍為空）；請刷新馬會頁後重試同步",
@@ -1261,7 +1261,7 @@
         "投注計算機「投注金額」總額未更新；每注金額填寫後請稍候再添加",
       HKJC_PREMATURE_SLIP_LINE: "勾選後馬會自動加了預設注單且無法清除；請手動刪除投注區該行後重試",
       HKJC_STAKE_TOTAL_MISMATCH:
-        "馬會投注區總金額與插件不一致；請勿發送注項，刷新馬會頁後重試同步",
+        "行内金额已写入，但底部「總投注金額」未更新；请在投注区逐行点击金额框再点外部，核对后再发送",
     };
     if (c === "PAGE_MISMATCH" && res) return formatHkjcPageMismatchMessage(res);
     if (c === "NO_HKJC_TAB" && res?.expectedUrl) {
@@ -1328,6 +1328,9 @@
     if (/receiving end does not exist|could not establish connection/i.test(c)) {
       return "無法連接馬會頁面，請重新載入本擴充功能並刷新馬會頁";
     }
+    if (/back\/forward cache|message channel is closed/i.test(c)) {
+      return "馬會頁面正在載入，請待頁面穩定後再按同步";
+    }
     if (/^[A-Z][A-Z0-9_]+$/.test(c)) return "同步失敗，請刷新馬會頁後重試";
     return c || "同步失敗，請稍後重試";
   }
@@ -1346,16 +1349,16 @@
         syncRes.stakeVerify ?? {
           ok: true,
           skippedGrandTotal: true,
-          expectedDelta: sumSyncedItemsStake(payload.syncScope),
+          expectedDelta: syncRes.stakeVerify?.expectedDelta ?? 0,
           actualDelta: null,
         }
       );
     }
-    const expectedDelta = sumSyncedItemsStake(payload.syncScope);
-    const slipTotalBefore = syncRes?.stakeVerify?.slipTotalBefore ?? null;
-    if (syncRes?.stakeVerify?.ok && syncRes.stakeVerify.expectedDelta === expectedDelta) {
+    if (syncRes?.stakeVerify && syncRes.stakeVerify.expectedDelta != null) {
       return syncRes.stakeVerify;
     }
+    const expectedDelta = sumSyncedItemsStake(payload.syncScope);
+    const slipTotalBefore = syncRes?.stakeVerify?.slipTotalBefore ?? null;
     if (!chrome?.runtime?.sendMessage || !payload?.url) {
       return syncRes?.stakeVerify ?? { ok: false, expectedDelta, actualDelta: null };
     }
@@ -1380,9 +1383,10 @@
   }
 
   /** P5：同步後確認閘門——總額一致才可發送 */
-  function showHkjcSendGate(verify, added, backendNote, syncScope) {
+  function showHkjcSendGate(verify, added, backendNote, syncScope, errCount = 0) {
     const note = backendNote ? String(backendNote).replace(/^[，。]+/, "").trim() : "";
     const noteSuffix = note ? `（${note}）` : "";
+    const partialNote = errCount > 0 ? `${errCount} 項未寫入 · ` : "";
     if (verify?.ok && verify?.skippedGrandTotal) {
       showActionFeedback(
         `已寫入 ${added} 項 · Dutch 拆賬模式，請逐行核對金額後再按馬會「發送注項」${noteSuffix}`,
@@ -1407,6 +1411,26 @@
       return;
     }
     const exp = fmtMoney(verify?.expectedDelta ?? sumSyncedItemsStake(syncScope));
+    const lineOk =
+      verify?.lineSumDelta != null &&
+      verify?.expectedDelta != null &&
+      verify.lineSumDelta === verify.expectedDelta;
+    if (added > 0 && lineOk) {
+      showActionFeedback(
+        `已寫入 ${added} 項 · ${partialNote}行内金额已齐，但底部「總投注金額」未更新 · 请在投注区逐行点击金额框再点外部，核对后再发送${noteSuffix}`,
+        "warn",
+        { persist: true }
+      );
+      return;
+    }
+    if (added > 0 && errCount > 0 && verify?.lineSumDelta === verify?.expectedDelta) {
+      showActionFeedback(
+        `已寫入 ${added} 項 · ${errCount} 項未寫入（如选马框锁定）· 請核對投注區後再按馬會「發送注項」${noteSuffix}`,
+        "warn",
+        { persist: true }
+      );
+      return;
+    }
     const act =
       verify?.actualDelta != null
         ? fmtMoney(verify.actualDelta)
@@ -1749,7 +1773,7 @@
       }
       const backendNote = await submitBackendAfterHkjcSync(res, payload.syncScope);
       const verify = await postSyncVerifyHkjcStake(payload, res);
-      showHkjcSendGate(verify, n, backendNote, payload.syncScope);
+      showHkjcSendGate(verify, n, backendNote, payload.syncScope, errN);
     } catch (e) {
       toast(`馬會同步失敗：${hkjcSyncErrorText(e?.message)}`);
     } finally {

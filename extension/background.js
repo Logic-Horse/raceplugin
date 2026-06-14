@@ -1,7 +1,7 @@
 /** 將 popup 的注單同步請求轉發至 bet.hkjc.com 分頁的 content script */
 const HKJC_ORIGIN = "https://bet.hkjc.com";
 /** 與 content-hkjc.js 的 SCRIPT_VERSION 保持一致；不符則強制重新注入 */
-const HKJC_CONTENT_SCRIPT_VERSION = 72;
+const HKJC_CONTENT_SCRIPT_VERSION = 95;
 const PANEL_PAGE = "popup.html";
 
 /** 類 MetaMask：點工具欄圖標打開 Chrome 右側邊欄，不遮擋馬會頁中央 */
@@ -250,6 +250,197 @@ async function clearHkjcContentFlags(tabId) {
 }
 
 function runRacepluginMainWorldDomOp(op) {
+  function pointerClick(target) {
+    if (!target) return;
+    try {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* ignore */
+    }
+    const rect = target.getBoundingClientRect();
+    const x = rect.left + Math.min(Math.max(rect.width / 2, 1), Math.max(rect.width - 1, 1));
+    const y = rect.top + Math.min(Math.max(rect.height / 2, 1), Math.max(rect.height - 1, 1));
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: 1,
+    };
+    try {
+      target.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          ...base,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+    target.dispatchEvent(new MouseEvent("mousedown", base));
+    try {
+      target.dispatchEvent(
+        new PointerEvent("pointerup", {
+          ...base,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+    target.dispatchEvent(new MouseEvent("mouseup", base));
+    target.dispatchEvent(new MouseEvent("click", base));
+  }
+
+  function resetTracker(input) {
+    const tracker = input?._valueTracker;
+    if (tracker) {
+      try {
+        tracker.setValue(String(input.value ?? ""));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function reactSetInput(input, value) {
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!desc?.set) return false;
+    resetTracker(input);
+    desc.set.call(input, String(value));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function reactTypeInput(input, value) {
+    const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!desc?.set) return "";
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    try {
+      input.focus();
+      pointerClick(input);
+      input.select?.();
+    } catch {
+      /* ignore */
+    }
+    resetTracker(input);
+    desc.set.call(input, "");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    let acc = "";
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: code,
+          which: code,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      acc += ch;
+      resetTracker(input);
+      desc.set.call(input, acc);
+      try {
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            data: ch,
+            inputType: "insertText",
+          })
+        );
+      } catch {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      input.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: ch,
+          code: `Digit${ch}`,
+          keyCode: code,
+          which: code,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return String(input.value ?? "").replace(/[^\d]/g, "");
+  }
+
+  function getReactProps(node) {
+    if (!node || typeof node !== "object") return null;
+    const key = Object.keys(node).find((k) => k.startsWith("__reactProps$"));
+    return key ? node[key] : null;
+  }
+
+  /** 直接调用 React onInput/onChange/onBlur，比 focus-blur 更易更新 slip 状态 */
+  function reactInputCommit(input, value, opts = {}) {
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    if (!input) return { ok: false, error: "NO_INPUT" };
+    reactTypeInput(input, text);
+    const props = getReactProps(input);
+    const ev = {
+      target: input,
+      currentTarget: input,
+      type: "input",
+      bubbles: true,
+      cancelable: true,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    };
+    if (props?.onInput) {
+      try {
+        props.onInput(ev);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (props?.onChange) {
+      try {
+        props.onChange({ ...ev, type: "change" });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (opts.blur !== false) {
+      try {
+        input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      } catch {
+        /* ignore */
+      }
+      if (props?.onBlur) {
+        try {
+          props.onBlur({ ...ev, type: "blur" });
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        input.blur();
+      } catch {
+        /* ignore */
+      }
+    }
+    return { ok: true, hadProps: Boolean(props), value: text };
+  }
+
+  if (op?.type === "react-input-commit") {
+    const input =
+      (op.inputId ? document.getElementById(op.inputId) : null) ||
+      (op.tempId ? document.getElementById(op.tempId) : null);
+    if (!input) return { ok: false, error: "NO_INPUT" };
+    return reactInputCommit(input, op.value, { blur: op.blur !== false });
+  }
+
   if (op?.type === "calc-add-sequence") {
     const input = op.inputId ? document.getElementById(op.inputId) : null;
     const addBtn = op.addId ? document.getElementById(op.addId) : null;
@@ -270,6 +461,25 @@ function runRacepluginMainWorldDomOp(op) {
     return { ok: true };
   }
 
+  if (op?.type === "focus-blur-retype") {
+    const input = op.inputId ? document.getElementById(op.inputId) : null;
+    const outside = op.outsideId ? document.getElementById(op.outsideId) : null;
+    if (!input) return { ok: false, error: "NO_INPUT" };
+    const text = String(op.value ?? "").replace(/[^\d]/g, "");
+    reactTypeInput(input, text);
+    if (outside) {
+      pointerClick(outside);
+    } else {
+      try {
+        input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      } catch {
+        /* ignore */
+      }
+      input.blur();
+    }
+    return { ok: true, value: String(input.value ?? "").replace(/[^\d]/g, "") };
+  }
+
   if (op?.type === "focus-blur") {
     const input = op.inputId ? document.getElementById(op.inputId) : null;
     const outside = op.outsideId ? document.getElementById(op.outsideId) : null;
@@ -280,14 +490,9 @@ function runRacepluginMainWorldDomOp(op) {
       /* ignore */
     }
     input.focus();
-    input.click();
+    pointerClick(input);
     if (outside) {
-      try {
-        outside.scrollIntoView({ block: "nearest", inline: "nearest" });
-      } catch {
-        /* ignore */
-      }
-      outside.click();
+      pointerClick(outside);
     } else {
       input.blur();
     }
@@ -648,11 +853,68 @@ function installRacepluginMainWorldBridge() {
     }
   }
 
+  function getReactProps(node) {
+    if (!node || typeof node !== "object") return null;
+    const key = Object.keys(node).find((k) => k.startsWith("__reactProps$"));
+    return key ? node[key] : null;
+  }
+
+  function reactInputCommit(input, value, opts = {}) {
+    const text = String(value ?? "").replace(/[^\d]/g, "");
+    if (!input) return false;
+    reactTypeInput(input, text);
+    const props = getReactProps(input);
+    const ev = {
+      target: input,
+      currentTarget: input,
+      type: "input",
+      bubbles: true,
+      cancelable: true,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    };
+    if (props?.onInput) {
+      try {
+        props.onInput(ev);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (props?.onChange) {
+      try {
+        props.onChange({ ...ev, type: "change" });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (opts.blur !== false) {
+      try {
+        input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      } catch {
+        /* ignore */
+      }
+      if (props?.onBlur) {
+        try {
+          props.onBlur({ ...ev, type: "blur" });
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        input.blur();
+      } catch {
+        /* ignore */
+      }
+    }
+    return true;
+  }
+
   document.addEventListener("raceplugin-main-set-input", (ev) => {
     const { tempId, value, type } = ev.detail || {};
     const el = tempId ? document.getElementById(tempId) : null;
     if (!el) return;
-    if (type === "type-input") reactTypeInput(el, value);
+    if (type === "react-input-commit") reactInputCommit(el, value);
+    else if (type === "type-input") reactTypeInput(el, value);
     else if (type === "insert-text") reactInsertTextInput(el, value);
     else if (type === "commit-input") reactCommitInput(el);
     else reactSetInput(el, value);
@@ -676,6 +938,7 @@ function installRacepluginMainWorldBridge() {
     const el = op.tempId ? document.getElementById(op.tempId) : null;
     if (!el) return;
     if (op.type === "set-input") reactSetInput(el, op.value);
+    else if (op.type === "react-input-commit") reactInputCommit(el, op.value, { blur: op.blur !== false });
     else if (op.type === "type-input") reactTypeInput(el, op.value);
     else if (op.type === "commit-input") reactCommitInput(el);
     else if (op.type === "insert-text") reactInsertTextInput(el, op.value);
@@ -737,21 +1000,36 @@ async function ensureHkjcContentScript(tabId) {
   return false;
 }
 
-async function sendToContent(tabId, payload) {
-  const ready = await ensureHkjcContentScript(tabId);
-  if (!ready) throw new Error("CONTENT_SCRIPT_UNAVAILABLE");
+async function navigateHkjcTabToUrl(tabId, targetUrl) {
+  await chrome.tabs.update(tabId, { url: targetUrl });
+  await waitForTabComplete(tabId);
+  await waitForHkjcUrl(tabId, targetUrl);
+  await ensureHkjcContentScript(tabId);
+  const path = parseHkjcRacePath(targetUrl);
+  await sleep(path?.segment === "cross_alup" ? 1400 : 850);
+  return chrome.tabs.get(tabId);
+}
 
-  try {
-    return await chrome.tabs.sendMessage(tabId, { type: "HKJC_APPLY_SLIP", payload });
-  } catch (e) {
-    const msg = String(e?.message || e);
-    if (/receiving end does not exist|could not establish connection/i.test(msg)) {
-      await injectHkjcContentScript(tabId);
-      await sleep(500);
+async function sendToContent(tabId, payload) {
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const ready = await ensureHkjcContentScript(tabId);
+    if (!ready) throw new Error("CONTENT_SCRIPT_UNAVAILABLE");
+
+    try {
       return await chrome.tabs.sendMessage(tabId, { type: "HKJC_APPLY_SLIP", payload });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      const retriable =
+        /receiving end does not exist|could not establish connection|back\/forward cache|message channel is closed/i.test(
+          msg
+        );
+      if (!retriable || attempt >= maxAttempts - 1) throw e;
+      await sleep(700 + attempt * 350);
+      await ensureHkjcContentScript(tabId);
     }
-    throw e;
   }
+  throw new Error("CONTENT_SCRIPT_UNAVAILABLE");
 }
 
 /** 若尚無 bet.hkjc.com 分頁則新建（與「同步到馬會」相同策略，不搶焦點） */
@@ -813,13 +1091,10 @@ async function handleSyncToHkjc(payload) {
     }
   }
 
-  /** 賽馬日不同時導向目標 URL，交由 content script 繼續切馬場／場次（不直接報 PAGE_MISMATCH） */
-  if (strictSamePage && !urlsMatchSameDay(tab.url, targetUrl) && tab?.id) {
+  /** 分页 URL 与目标场次不一致时，由 background 整页导航（content 内 assign 会断开消息通道） */
+  if (tab?.id && targetUrl && !urlsMatchRace(tab.url, targetUrl)) {
     try {
-      await chrome.tabs.update(tab.id, { url: targetUrl });
-      await waitForTabComplete(tab.id);
-      await waitForHkjcUrl(tab.id, targetUrl);
-      tab = await chrome.tabs.get(tab.id);
+      tab = await navigateHkjcTabToUrl(tab.id, targetUrl);
     } catch {
       return pageMismatchResponse(tab, targetUrl, payload);
     }
